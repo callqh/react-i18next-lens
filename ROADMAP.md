@@ -60,9 +60,9 @@
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| MCP protocol implementation | 🔴 Not Started | Just a stub |
-| audit_i18n tool | 🔴 Not Started | - |
-| get_missing_translations tool | 🔴 Not Started | - |
+| MCP protocol implementation | ✅ Complete | Uses standard stdio jsonrpc |
+| audit_i18n tool | ✅ Complete | Returns structured missing keys |
+| get_missing_translations tool | ✅ Complete | Filterable missing translations |
 | suggest_translation_fixes tool | 🔴 Not Started | - |
 | validate_placeholders tool | 🔴 Not Started | - |
 | Resources (translation files) | 🔴 Not Started | - |
