@@ -106,7 +106,7 @@
 ### Remaining Work
 
 - [x] Fix compilation errors in audit.rs and scanner.rs
-- [ ] Complete MCP server implementation
+- [ ] Complete MCP server test coverage
 - [ ] Add tests for CLI and audit module
 - [ ] Update README with new CLI/MCP usage
 - [ ] Publish v0.2.0
