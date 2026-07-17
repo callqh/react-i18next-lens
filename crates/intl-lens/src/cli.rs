@@ -5,14 +5,14 @@ use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use intl_lens::audit::AuditResult;
-use intl_lens::config::I18nConfig;
-use intl_lens::i18n::store::TranslationStore;
-use intl_lens::scanner::CodeScanner;
+use react_i18next_lens::audit::AuditResult;
+use react_i18next_lens::config::I18nConfig;
+use react_i18next_lens::i18n::store::TranslationStore;
+use react_i18next_lens::scanner::CodeScanner;
 
 #[derive(Parser)]
-#[command(name = "intl-lens-cli")]
-#[command(about = "CLI tool for i18n auditing and analysis")]
+#[command(name = "react-i18next-lens-cli")]
+#[command(about = "Audit and analyze React i18next workspaces")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -165,7 +165,7 @@ async fn run_check(
     output: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let config = I18nConfig::load_from_workspace(workspace);
-    let scanner = CodeScanner::new(&config.function_patterns);
+    let scanner = CodeScanner::new(config.default_namespace.as_deref());
 
     let mut all_keys = Vec::new();
 
@@ -305,7 +305,7 @@ async fn run_fix(_workspace: &Path, _dry_run: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn format_terminal(report: &intl_lens::audit::AuditReport, suggest_fixes: bool) -> String {
+fn format_terminal(report: &react_i18next_lens::audit::AuditReport, suggest_fixes: bool) -> String {
     let mut output = String::new();
 
     output.push_str(&format!(
@@ -453,7 +453,7 @@ fn format_terminal(report: &intl_lens::audit::AuditReport, suggest_fixes: bool) 
     output
 }
 
-fn format_markdown(report: &intl_lens::audit::AuditReport, suggest_fixes: bool) -> String {
+fn format_markdown(report: &react_i18next_lens::audit::AuditReport, suggest_fixes: bool) -> String {
     let mut md = String::new();
 
     md.push_str("# i18n Audit Report\n\n");

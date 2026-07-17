@@ -1,247 +1,110 @@
-<div align="center">
+# React i18next Lens
 
-# 🔍 Intl Lens
+React i18next analysis for editors, CI, and AI agents.
 
-**i18n support for Zed Editor - see translations inline.**
+React i18next Lens connects statically resolved translation usages in
+JavaScript/TypeScript React code to i18next JSON resources. It provides a Zed
+language server, a CLI, and an MCP server backed by the same Rust core.
 
-[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Zed](https://img.shields.io/badge/zed-extension-purple.svg)](https://zed.dev)
+Repository: [callqh/react-i18next-lens](https://github.com/callqh/react-i18next-lens)
 
-Stop guessing what `t("common.buttons.submit")` means.<br/>
-**See translations inline. Catch missing keys instantly. Ship with confidence.**
+> This project is a breaking, React-focused fork of
+> [nguyenphutrong/intl-lens](https://github.com/nguyenphutrong/intl-lens).
+> Thank you to [Trong Nguyen](https://github.com/nguyenphutrong) and the original
+> contributors for the foundation. The fork intentionally narrows the product
+> scope and is not presented as an upstream continuation.
 
-[Features](#-features) · [Install](#-installation) · [Configure](#-configuration) · [Contribute](#-contributing)
+## Scope
 
-</div>
+Supported:
 
----
+- JavaScript, JSX, TypeScript, and TSX
+- `react-i18next`, `i18next`, and `next-i18next`
+- `useTranslation`, `t`, selector syntax, `i18next.t`, `getFixedT`, and `Trans`
+- i18next JSON v4 resources
+- static translation keys
+- namespace, `keyPrefix`, per-call `ns`, and static `defaultValue`
 
-## ✨ Features
+Intentionally unsupported:
 
-| Feature | Description |
-|---------|-------------|
-| 🔍 **Inline Hints** | See translation values right next to your i18n keys |
-| 💬 **Hover Preview** | View all locale translations with quick jump links |
-| ⚠️ **Missing Key Detection** | Get warnings for undefined translation keys |
-| 🌐 **Incomplete Coverage** | Know which locales are missing translations |
-| ⚡ **Autocomplete** | Type `t("` and get instant key suggestions with previews |
-| 🎯 **Go to Definition** | Jump directly to the translation in any locale file |
-| 🔄 **Auto Reload** | Changes to translation files are picked up automatically |
+- Vue, Svelte, Angular, PHP, Blade, Dart, and Flutter integrations
+- YAML, ARB, and PHP translation resources
+- user-defined regex extraction patterns
+- guessing dynamic keys
+- automatic deletion of unused translations
 
-## 🎬 Demo
+Dynamic key expressions are retained as unresolved analysis facts for a future
+resolver. They are never guessed or treated as safe evidence for deletion.
 
-```tsx
-// Before: What does this even mean? 🤔
-<button>{t("common.actions.submit")}</button>
+## Editor features
 
-// After: Crystal clear! ✨
-<button>{t("common.actions.submit")}</button>  // → Submit
-```
+- source-locale messages as low-emphasis inlay hints
+- hover previews across locales
+- go to exact translation definition
+- missing and incomplete translation diagnostics
+- explicit code actions for supported safe edits
+- automatic reload when JSON resources change
 
-**Hover over any i18n key to see:**
-```
-🌍 common.actions.submit
+Zed exposes these features through standard LSP capabilities. It cannot replace
+the source key visually and reveal it only on selection; a future editor client
+with a decoration API can render that experience using the same core annotation
+data.
 
-en: Submit (↗)
-vi: Gửi (↗)
-ja: 送信 (↗)
----
-```
+## Configuration
 
-![Hover Preview](screenshots/screenshot-1.png)
-
-![Autocomplete](screenshots/screenshot-2-auto-compelete.png)
-
-## 🚀 Installation
-
-### From Zed Extensions (Recommended)
-
-1. Open Zed
-2. Go to Extensions (`cmd+shift+x`)
-3. Search for "Intl Lens"
-4. Click Install
-
-### Build from Source
-
-```bash
-git clone https://github.com/nguyenphutrong/intl-lens.git
-cd intl-lens
-cargo build --release -p intl-lens
-ln -sf $(pwd)/target/release/intl-lens ~/.local/bin/
-```
-
-### Configure Zed (Manual Installation)
-
-Add to `~/.config/zed/settings.json`:
-
-```jsonc
-{
-  "lsp": {
-    "intl-lens": {
-      "binary": { "path": "intl-lens" }
-    }
-  },
-  "languages": {
-    "TSX": {
-      "language_servers": ["typescript-language-server", "intl-lens", "..."]
-    },
-    "TypeScript": {
-      "language_servers": ["typescript-language-server", "intl-lens", "..."]
-    }
-  }
-}
-```
-
-**Restart Zed. Done. 🎉**
-
-## 🎯 Supported Frameworks
-
-Works out of the box with:
-
-| Framework | Patterns |
-|-----------|----------|
-| **react-i18next** | `t("key")` `useTranslation()` `<Trans i18nKey="key">` |
-| **i18next** | `t("key")` `i18n.t("key")` |
-| **vue-i18n** | `$t("key")` `t("key")` |
-| **react-intl** | `formatMessage({ id: "key" })` |
-| **ngx-translate (Angular)** | `translateService.instant("key")` `translateService.get("key")` `| translate` |
-| **Transloco (Angular)** | `translocoService.translate("key")` `selectTranslate("key")` `| transloco` |
-| **Laravel** | `__("key")` `trans("key")` `Lang::get("key")` `@lang("key")` |
-| **Flutter (gen_l10n)** | `AppLocalizations.of(context)!.key` |
-| **easy_localization** | `'key'.tr()` `tr('key')` `context.tr('key')` |
-| **flutter_i18n** | `FlutterI18n.translate(context, 'key')` `I18nText('key')` |
-| **GetX** | `'key'.tr` `'key'.trParams({})` |
-| **svelte-i18n** | `$_("key")` `$t("key")` `$format("key")` |
-| **sveltekit-i18n** | `$t("key")` `t("key")` |
-| **Custom** | Configure your own patterns! |
-
-## 🧩 Supported Languages
-
-- TypeScript / TSX
-- JavaScript / JSX
-- HTML
-- Angular templates
-- PHP
-- Blade
-- Dart (Flutter)
-- Vue.js
-- Svelte
-
-## ⚙️ Configuration
-
-Create `.zed/i18n.json` in your project root:
+The project entry point is `react-i18next-lens.json`:
 
 ```json
 {
-  "localePaths": ["src/locales", "public/locales"],
-  "sourceLocale": "en"
+  "extends": "./next-i18next.config.js"
 }
 ```
 
-<details>
-<summary><strong>📋 All Options</strong></summary>
+Existing i18next or next-i18next configuration is statically analyzed rather
+than executed. Configuration sources may use:
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `localePaths` | `string[]` | `["locales", "i18n", ...]` | Where to find translation files |
-| `sourceLocale` | `string` | `"en"` | Your primary language |
-| `keyStyle` | `"nested" \| "flat"` | `"auto"` | JSON structure style |
-| `functionPatterns` | `string[]` | See below | Custom regex patterns |
-
-</details>
-
-<details>
-<summary><strong>🔧 Custom Function Patterns</strong></summary>
-
-```json
-{
-  "functionPatterns": [
-    "t\\s*\\(\\s*[\"']([^\"']+)[\"']",
-    "translate\\s*\\(\\s*[\"']([^\"']+)[\"']",
-    "i18n\\.get\\s*\\(\\s*[\"']([^\"']+)[\"']"
-  ]
-}
+```text
+.js .jsx .cjs .mjs .ts .tsx .cts .mts .json
 ```
 
-</details>
+Lens-specific overrides belong in the same project file. `sourceLocale` must be
+resolved explicitly; the runtime does not silently assume English.
 
-## 📁 Supported File Formats
+Translation resources remain strict JSON regardless of the configuration file
+extension.
 
-| Format | Extensions |
-|--------|------------|
-| JSON | `.json` |
-| YAML | `.yaml` `.yml` |
-| PHP | `.php` |
-| ARB (Flutter) | `.arb` |
+## Build
 
-**Nested structure:**
-```
-locales/
-├── en/
-│   └── common.json
-├── vi/
-│   └── common.json
-└── ja/
-    └── common.json
+```sh
+git clone https://github.com/callqh/react-i18next-lens.git
+cd react-i18next-lens
+cargo build --release -p react-i18next-lens
 ```
 
-**Or flat structure:**
-```
-locales/
-├── en.json
-├── vi.json
-└── ja.json
-```
+The resulting programs are:
 
-**Flutter ARB structure:**
-```
-lib/
-└── l10n/
-    ├── app_en.arb
-    ├── app_es.arb
-    └── app_vi.arb
+```text
+target/release/react-i18next-lens
+target/release/react-i18next-lens-cli
+target/release/react-i18next-lens-mcp
 ```
 
-## 🛠️ Development
+For local Zed development, put `react-i18next-lens` on the environment `PATH`
+seen by Zed, then install this repository as a dev extension.
 
-```bash
-cargo test          # Run tests
-cargo build         # Debug build
-cargo build -r      # Release build
+## Development
 
-# Run with debug logging
-RUST_LOG=debug ./target/release/intl-lens
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets
 ```
 
-## 🤝 Contributing
+The target module boundaries and migration gates are documented in
+[`docs/architecture.md`](docs/architecture.md). The Oxc parser decision is
+documented in
+[`docs/research/source-parser-options.md`](docs/research/source-parser-options.md).
 
-Contributions are welcome! Here's how:
+## License
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feat/amazing-feature`)
-3. Commit your changes (`git commit -m 'feat: add amazing feature'`)
-4. Push to the branch (`git push origin feat/amazing-feature`)
-5. Open a Pull Request
-
-### Ideas for Contribution
-
-- [ ] Extract hardcoded strings to translation files
-- [ ] Support for more file formats (TOML, PO)
-- [ ] Namespace support for large projects
-- [ ] Translation file validation
-- [ ] Integration with translation services
-
-## 📄 License
-
-MIT © [Trong Nguyen](https://github.com/nguyenphutrong)
-
----
-
-<div align="center">
-
-**If this project helps you, consider giving it a ⭐**
-
-[Report Bug](https://github.com/nguyenphutrong/intl-lens/issues) · [Request Feature](https://github.com/nguyenphutrong/intl-lens/issues)
-
-</div>
+MIT. See [`LICENSE`](LICENSE).

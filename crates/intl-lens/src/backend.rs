@@ -56,7 +56,7 @@ impl I18nBackend {
         let config = I18nConfig::load_from_workspace(&root);
         tracing::info!("Config loaded, locale_paths: {:?}", config.locale_paths);
 
-        let key_finder = KeyFinder::new(&config.function_patterns);
+        let key_finder = KeyFinder::new(config.default_namespace.as_deref());
         *self.key_finder.write().await = key_finder;
 
         let store = TranslationStore::new(root.clone());
@@ -114,41 +114,6 @@ impl I18nBackend {
                 scheme: None,
                 pattern: None,
             },
-            DocumentFilter {
-                language: Some("html".to_string()),
-                scheme: None,
-                pattern: None,
-            },
-            DocumentFilter {
-                language: Some("angular".to_string()),
-                scheme: None,
-                pattern: None,
-            },
-            DocumentFilter {
-                language: Some("php".to_string()),
-                scheme: None,
-                pattern: None,
-            },
-            DocumentFilter {
-                language: Some("blade".to_string()),
-                scheme: None,
-                pattern: None,
-            },
-            DocumentFilter {
-                language: Some("dart".to_string()),
-                scheme: None,
-                pattern: None,
-            },
-            DocumentFilter {
-                language: Some("vue".to_string()),
-                scheme: None,
-                pattern: None,
-            },
-            DocumentFilter {
-                language: Some("svelte".to_string()),
-                scheme: None,
-                pattern: None,
-            },
         ]);
 
         let register_options = InlayHintRegistrationOptions {
@@ -160,7 +125,7 @@ impl I18nBackend {
                 document_selector,
             },
             static_registration_options: StaticRegistrationOptions {
-                id: Some("intl-lens-inlay-hint".to_string()),
+                id: Some("react-i18next-lens-inlay-hint".to_string()),
             },
         };
 
@@ -176,7 +141,7 @@ impl I18nBackend {
         };
 
         let registration = Registration {
-            id: "intl-lens-inlay-hint".to_string(),
+            id: "react-i18next-lens-inlay-hint".to_string(),
             method: "textDocument/inlayHint".to_string(),
             register_options: Some(register_options),
         };
@@ -225,7 +190,7 @@ impl I18nBackend {
         };
 
         let registration = Registration {
-            id: "intl-lens-watched-files".to_string(),
+            id: "react-i18next-lens-watched-files".to_string(),
             method: "workspace/didChangeWatchedFiles".to_string(),
             register_options: Some(register_options),
         };
@@ -528,8 +493,8 @@ impl I18nBackend {
         }
     }
 
-    fn translation_extensions() -> [&'static str; 5] {
-        [".json", ".yaml", ".yml", ".php", ".arb"]
+    fn translation_extensions() -> [&'static str; 1] {
+        [".json"]
     }
 
     fn has_translation_extension(path: &Path) -> bool {
@@ -844,7 +809,7 @@ impl LanguageServer for I18nBackend {
                     },
                 )),
                 execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: vec!["intl-lens.createRawTranslationKey".to_string()],
+                    commands: vec!["react-i18next-lens.createRawTranslationKey".to_string()],
                     work_done_progress_options: Default::default(),
                 }),
                 ..Default::default()
@@ -1053,7 +1018,7 @@ impl LanguageServer for I18nBackend {
                 diagnostics: Some(vec![diagnostic.clone()]),
                 command: Some(Command {
                     title: format!("Create raw translation key '{}'", key),
-                    command: "intl-lens.createRawTranslationKey".to_string(),
+                    command: "react-i18next-lens.createRawTranslationKey".to_string(),
                     arguments: Some(vec![Value::String(key)]),
                 }),
                 ..Default::default()
@@ -1070,7 +1035,7 @@ impl LanguageServer for I18nBackend {
     }
 
     async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
-        if params.command != "intl-lens.createRawTranslationKey" {
+        if params.command != "react-i18next-lens.createRawTranslationKey" {
             return Ok(None);
         }
 

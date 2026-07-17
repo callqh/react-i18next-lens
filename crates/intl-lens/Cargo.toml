@@ -1,26 +1,26 @@
 [package]
-name = "intl-lens"
+name = "react-i18next-lens"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "i18n Lens - LSP server, CLI, and MCP server for internationalization"
+description = "React i18next analysis for editors, CI, and AI agents"
 
 [lib]
-name = "intl_lens"
+name = "react_i18next_lens"
 path = "src/lib.rs"
 
 [[bin]]
-name = "intl-lens"
+name = "react-i18next-lens"
 path = "src/main.rs"
 
 [[bin]]
-name = "intl-lens-cli"
+name = "react-i18next-lens-cli"
 path = "src/cli.rs"
 
 [[bin]]
-name = "intl-lens-mcp"
+name = "react-i18next-lens-mcp"
 path = "src/mcp.rs"
 
 [dependencies]
@@ -28,7 +28,6 @@ tower-lsp.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
@@ -36,6 +35,13 @@ dashmap.workspace = true
 regex.workspace = true
 globset.workspace = true
 walkdir.workspace = true
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_ast_visit.workspace = true
+oxc_parser.workspace = true
+oxc_semantic.workspace = true
+oxc_span.workspace = true
+arc-swap.workspace = true
 clap = { version = "4", features = ["derive"] }
 colored = "2"
 indicatif = "0.17"

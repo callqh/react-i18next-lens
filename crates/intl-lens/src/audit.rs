@@ -92,7 +92,7 @@ impl AuditResult {
     }
 
     pub fn scan_codebase(&mut self) {
-        let scanner = CodeScanner::new(&self.config.function_patterns);
+        let scanner = CodeScanner::new(self.config.default_namespace.as_deref());
         self.scanned_files = scanner.scan_directory(&self.workspace_root);
 
         // Aggregate key usages
@@ -242,11 +242,9 @@ impl AuditResult {
             let full_path = self.workspace_root.join(path);
             if full_path.exists() {
                 // Try to find the locale file
-                for ext in ["json", "yaml", "yml"] {
-                    let file_path = full_path.join(format!("{}.{}", locale, ext));
-                    if file_path.exists() {
-                        return Some(file_path);
-                    }
+                let file_path = full_path.join(format!("{}.json", locale));
+                if file_path.exists() {
+                    return Some(file_path);
                 }
             }
         }

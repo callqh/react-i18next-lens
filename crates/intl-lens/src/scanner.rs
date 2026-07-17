@@ -23,9 +23,9 @@ pub struct CodeScanner {
 }
 
 impl CodeScanner {
-    pub fn new(patterns: &[String]) -> Self {
+    pub fn new(default_namespace: Option<&str>) -> Self {
         Self {
-            key_finder: KeyFinder::new(patterns),
+            key_finder: KeyFinder::new(default_namespace),
         }
     }
 
@@ -33,7 +33,7 @@ impl CodeScanner {
         let mut scanned_files = Vec::new();
 
         // Supported file extensions
-        let extensions = ["ts", "tsx", "js", "jsx", "vue", "php", "blade.php", "dart"];
+        let extensions = ["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"];
 
         for entry in walkdir::WalkDir::new(root)
             .into_iter()
@@ -66,7 +66,7 @@ impl CodeScanner {
             }
 
             if let Ok(content) = std::fs::read_to_string(path) {
-                let found_keys = self.scan_content(&content);
+                let found_keys = self.scan_content_at_path(path, &content);
                 if !found_keys.is_empty() {
                     scanned_files.push(ScannedFile {
                         path: path.to_path_buf(),
@@ -81,7 +81,11 @@ impl CodeScanner {
     }
 
     pub fn scan_content(&self, content: &str) -> Vec<CodeKeyOccurrence> {
-        let found = self.key_finder.find_keys(content);
+        self.scan_content_at_path(Path::new("document.tsx"), content)
+    }
+
+    pub fn scan_content_at_path(&self, path: &Path, content: &str) -> Vec<CodeKeyOccurrence> {
+        let found = self.key_finder.find_keys_in_path(path, content);
 
         found
             .into_iter()

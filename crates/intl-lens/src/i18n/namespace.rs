@@ -38,11 +38,7 @@ pub fn file_namespace_prefix<'a>(
         return None;
     }
 
-    if extension == "php" {
-        return Some(file_stem);
-    }
-
-    if namespace_enabled && matches!(extension, "json" | "yaml" | "yml") {
+    if namespace_enabled && extension == "json" {
         return Some(file_stem);
     }
 
@@ -183,7 +179,7 @@ fn looks_like_namespace_locale_root(root: &Path, relative_path: &str) -> bool {
                         .path()
                         .extension()
                         .and_then(|extension| extension.to_str())
-                        .is_some_and(|extension| matches!(extension, "json" | "yaml" | "yml"))
+                        .is_some_and(|extension| extension == "json")
             })
             .take(2)
             .count();

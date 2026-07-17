@@ -2,11 +2,11 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use intl_lens::audit::{
+use react_i18next_lens::audit::{
     AuditReport, AuditResult, FixSuggestion, MissingTranslation, PlaceholderIssue,
 };
-use intl_lens::config::I18nConfig;
-use intl_lens::i18n::store::TranslationStore;
+use react_i18next_lens::config::I18nConfig;
+use react_i18next_lens::i18n::store::TranslationStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -155,7 +155,7 @@ impl McpServer {
         Ok(json!({
             "protocolVersion": "2024-11-05",
             "serverInfo": ServerInfo {
-                name: "intl-lens-mcp",
+                name: "react-i18next-lens-mcp",
                 version: env!("CARGO_PKG_VERSION"),
             },
             "capabilities": {
@@ -206,19 +206,19 @@ impl McpServer {
     fn handle_resources_list(&self) -> Result<Value> {
         let resources = vec![
             ResourceDefinition {
-                uri: "intl-lens://config".to_string(),
-                name: "Intl Lens Config".to_string(),
+                uri: "react-i18next-lens://config".to_string(),
+                name: "React i18next Lens Config".to_string(),
                 description: "Resolved i18n configuration for the current workspace".to_string(),
                 mime_type: "application/json".to_string(),
             },
             ResourceDefinition {
-                uri: "intl-lens://audit/latest".to_string(),
+                uri: "react-i18next-lens://audit/latest".to_string(),
                 name: "Latest Audit Report".to_string(),
                 description: "Fresh audit report generated from the current workspace".to_string(),
                 mime_type: "application/json".to_string(),
             },
             ResourceDefinition {
-                uri: "intl-lens://translations/index".to_string(),
+                uri: "react-i18next-lens://translations/index".to_string(),
                 name: "Translation Inventory".to_string(),
                 description: "Loaded locales and translation key count".to_string(),
                 mime_type: "application/json".to_string(),
@@ -236,7 +236,7 @@ impl McpServer {
             .ok_or_else(|| anyhow!("Missing resource uri"))?;
 
         let contents = match uri {
-            "intl-lens://config" => {
+            "react-i18next-lens://config" => {
                 let config = I18nConfig::load_from_workspace(&self.workspace_root);
                 vec![ResourceContents {
                     uri: uri.to_string(),
@@ -244,7 +244,7 @@ impl McpServer {
                     text: serde_json::to_string_pretty(&config)?,
                 }]
             }
-            "intl-lens://audit/latest" => {
+            "react-i18next-lens://audit/latest" => {
                 let report = self.build_report(&self.workspace_root)?;
                 vec![ResourceContents {
                     uri: uri.to_string(),
@@ -252,7 +252,7 @@ impl McpServer {
                     text: serde_json::to_string_pretty(&report)?,
                 }]
             }
-            "intl-lens://translations/index" => {
+            "react-i18next-lens://translations/index" => {
                 let (_, store) = self.load_store(&self.workspace_root);
                 let payload = json!({
                     "workspace": self.workspace_root,
@@ -464,11 +464,9 @@ fn find_locale_file(workspace: &Path, locale: &str) -> Option<PathBuf> {
             continue;
         }
 
-        for extension in ["json", "yaml", "yml", "arb", "php"] {
-            let candidate = base.join(format!("{}.{}", locale, extension));
-            if candidate.exists() {
-                return Some(candidate);
-            }
+        let candidate = base.join(format!("{}.json", locale));
+        if candidate.exists() {
+            return Some(candidate);
         }
     }
 
@@ -583,7 +581,7 @@ fn write_message(writer: &mut impl Write, response: &JsonRpcResponse) -> Result<
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env().add_directive("intl_lens=info".parse()?))
+        .with(EnvFilter::from_default_env().add_directive("react_i18next_lens=info".parse()?))
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 

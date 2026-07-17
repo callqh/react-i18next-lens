@@ -6,8 +6,8 @@ members = ["crates/*"]
 version = "0.1.5"
 edition = "2021"
 license = "MIT"
-authors = ["Trong Nguyen"]
-repository = "https://github.com/nguyenphutrong/intl-lens"
+authors = ["callqh", "Trong Nguyen"]
+repository = "https://github.com/callqh/react-i18next-lens"
 
 [workspace.dependencies]
 tower-lsp = "0.20"
@@ -18,7 +18,6 @@ tokio = { version = "1", features = ["full"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
 
 # Logging
 tracing = "0.1"
@@ -30,6 +29,13 @@ dashmap = "6"
 regex = "1"
 globset = "0.4"
 walkdir = "2"
+oxc_allocator = "=0.110.0"
+oxc_ast = "=0.110.0"
+oxc_ast_visit = "=0.110.0"
+oxc_parser = "=0.110.0"
+oxc_semantic = "=0.110.0"
+oxc_span = "=0.110.0"
+arc-swap = "1"
 
 # Zed extension
 zed_extension_api = "0.7"

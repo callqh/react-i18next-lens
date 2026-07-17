@@ -21,23 +21,23 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            name: intl-lens-x86_64-unknown-linux-gnu.tar.gz
+            name: react-i18next-lens-x86_64-unknown-linux-gnu.tar.gz
 
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            name: intl-lens-aarch64-unknown-linux-gnu.tar.gz
+            name: react-i18next-lens-aarch64-unknown-linux-gnu.tar.gz
 
           - target: x86_64-apple-darwin
             os: macos-latest
-            name: intl-lens-x86_64-apple-darwin.tar.gz
+            name: react-i18next-lens-x86_64-apple-darwin.tar.gz
 
           - target: aarch64-apple-darwin
             os: macos-latest
-            name: intl-lens-aarch64-apple-darwin.tar.gz
+            name: react-i18next-lens-aarch64-apple-darwin.tar.gz
 
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            name: intl-lens-x86_64-pc-windows-msvc.zip
+            name: react-i18next-lens-x86_64-pc-windows-msvc.zip
 
     steps:
       - uses: actions/checkout@v4
@@ -58,20 +58,20 @@ jobs:
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p intl-lens
+        run: cargo build --release --target ${{ matrix.target }} -p react-i18next-lens
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.name }} intl-lens
+          tar czf ../../../${{ matrix.name }} react-i18next-lens
           cd ../../..
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../${{ matrix.name }} intl-lens.exe
+          7z a ../../../${{ matrix.name }} react-i18next-lens.exe
           cd ../../..
 
       - uses: actions/upload-artifact@v4

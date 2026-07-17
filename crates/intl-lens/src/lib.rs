@@ -1,6 +1,9 @@
+pub mod analysis;
 pub mod audit;
+pub mod backend;
 pub mod config;
 pub mod document;
+pub mod domain;
 pub mod i18n;
 pub mod scanner;
 

@@ -98,9 +98,6 @@ impl TranslationStore {
 
     fn scan_directory(&self, dir: &Path, namespace_enabled: bool) {
         let json_glob = Glob::new("*.json").unwrap().compile_matcher();
-        let yaml_glob = Glob::new("*.{yaml,yml}").unwrap().compile_matcher();
-        let php_glob = Glob::new("*.php").unwrap().compile_matcher();
-        let arb_glob = Glob::new("*.arb").unwrap().compile_matcher();
 
         for entry in WalkDir::new(dir)
             .max_depth(3)
@@ -110,12 +107,7 @@ impl TranslationStore {
             let path = entry.path();
             let file_name = path.file_name().unwrap_or_default();
 
-            if path.is_file()
-                && (json_glob.is_match(file_name)
-                    || yaml_glob.is_match(file_name)
-                    || php_glob.is_match(file_name)
-                    || arb_glob.is_match(file_name))
-            {
+            if path.is_file() && json_glob.is_match(file_name) {
                 self.scan_file(path, namespace_enabled);
             }
         }
@@ -136,16 +128,6 @@ impl TranslationStore {
 
         if is_locale_code(file_stem) {
             return Some(file_stem.to_string());
-        }
-
-        // Handle ARB naming convention: app_en.arb, app_es.arb, etc.
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if ext == "arb" {
-                // Try to extract locale from patterns like "app_en" or "messages_en_US"
-                if let Some(locale) = extract_locale_from_arb_filename(file_stem) {
-                    return Some(locale);
-                }
-            }
         }
 
         if let Some(parent) = path.parent() {
@@ -391,40 +373,6 @@ fn is_ignored_workspace_dir(path: &Path) -> bool {
                 "node_modules" | ".git" | "target" | "dist" | "build" | ".nuxt" | ".output"
             )
         })
-}
-
-/// Extract locale from ARB filename patterns like "app_en", "messages_en_US", "intl_vi"
-fn extract_locale_from_arb_filename(file_stem: &str) -> Option<String> {
-    // Common ARB file prefixes
-    let prefixes = ["app_", "intl_", "messages_", "l10n_", "strings_"];
-
-    for prefix in prefixes {
-        if let Some(locale_part) = file_stem.strip_prefix(prefix) {
-            if is_locale_code(locale_part) {
-                return Some(locale_part.to_string());
-            }
-        }
-    }
-
-    // Try splitting by underscore and check if last part(s) form a locale
-    let parts: Vec<&str> = file_stem.split('_').collect();
-    if parts.len() >= 2 {
-        // Try last part as locale (e.g., "app_en" -> "en")
-        let last = parts[parts.len() - 1];
-        if is_locale_code(last) {
-            return Some(last.to_string());
-        }
-
-        // Try last two parts as locale (e.g., "app_en_US" -> "en_US")
-        if parts.len() >= 3 {
-            let locale = format!("{}_{}", parts[parts.len() - 2], parts[parts.len() - 1]);
-            if is_locale_code(&locale) {
-                return Some(locale);
-            }
-        }
-    }
-
-    None
 }
 
 #[cfg(test)]

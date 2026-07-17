@@ -1,10 +1,10 @@
 use zed_extension_api::{self as zed, LanguageServerId, Result, Worktree};
 
-struct IntlLensExtension {
+struct ReactI18nextLensExtension {
     cached_binary_path: Option<String>,
 }
 
-impl zed::Extension for IntlLensExtension {
+impl zed::Extension for ReactI18nextLensExtension {
     fn new() -> Self {
         Self {
             cached_binary_path: None,
@@ -26,7 +26,7 @@ impl zed::Extension for IntlLensExtension {
     }
 }
 
-impl IntlLensExtension {
+impl ReactI18nextLensExtension {
     fn get_server_binary_path(
         &mut self,
         language_server_id: &LanguageServerId,
@@ -38,7 +38,7 @@ impl IntlLensExtension {
             }
         }
 
-        if let Some(path) = worktree.which("intl-lens") {
+        if let Some(path) = worktree.which("react-i18next-lens") {
             self.cached_binary_path = Some(path.clone());
             return Ok(path);
         }
@@ -49,7 +49,7 @@ impl IntlLensExtension {
         );
 
         let release = zed::latest_github_release(
-            "nguyenphutrong/intl-lens",
+            "callqh/react-i18next-lens",
             zed::GithubReleaseOptions {
                 require_assets: true,
                 pre_release: false,
@@ -58,7 +58,7 @@ impl IntlLensExtension {
 
         let (platform, arch) = zed::current_platform();
         let asset_name = format!(
-            "intl-lens-{}-{}.{}",
+            "react-i18next-lens-{}-{}.{}",
             match arch {
                 zed::Architecture::Aarch64 => "aarch64",
                 zed::Architecture::X8664 => "x86_64",
@@ -81,9 +81,9 @@ impl IntlLensExtension {
             .find(|asset| asset.name == asset_name)
             .ok_or_else(|| format!("no asset found matching {asset_name}"))?;
 
-        let version_dir = format!("intl-lens-{}", release.version);
+        let version_dir = format!("react-i18next-lens-{}", release.version);
         let binary_path = format!(
-            "{version_dir}/intl-lens{}",
+            "{version_dir}/react-i18next-lens{}",
             match platform {
                 zed::Os::Windows => ".exe",
                 _ => "",
@@ -111,4 +111,4 @@ impl IntlLensExtension {
     }
 }
 
-zed::register_extension!(IntlLensExtension);
+zed::register_extension!(ReactI18nextLensExtension);
