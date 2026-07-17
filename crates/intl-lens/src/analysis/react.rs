@@ -120,6 +120,24 @@ fn is_supported_source_type(path: &Path) -> bool {
     )
 }
 
+fn is_project_i18next_wrapper(source: &str) -> bool {
+    source.split('/').any(|segment| {
+        segment.eq_ignore_ascii_case("i18n")
+            || segment
+                .strip_prefix("i18n.")
+                .is_some_and(|suffix| !suffix.is_empty())
+    })
+}
+
+fn is_i18next_binding_source(source: &str) -> bool {
+    matches!(source, "react-i18next" | "next-i18next" | "i18next")
+        || is_project_i18next_wrapper(source)
+}
+
+fn is_react_i18next_binding_source(source: &str) -> bool {
+    matches!(source, "react-i18next" | "next-i18next") || is_project_i18next_wrapper(source)
+}
+
 #[derive(Debug, Clone, Default)]
 struct TranslationContext {
     namespace: Option<String>,
@@ -199,7 +217,7 @@ impl<'s> BindingCollector<'s> {
 impl<'a> Visit<'a> for BindingCollector<'_> {
     fn visit_import_declaration(&mut self, declaration: &ImportDeclaration<'a>) {
         let source = declaration.source.value.as_str();
-        if !matches!(source, "react-i18next" | "next-i18next" | "i18next") {
+        if !is_i18next_binding_source(source) {
             walk::walk_import_declaration(self, declaration);
             return;
         }
@@ -210,27 +228,37 @@ impl<'a> Visit<'a> for BindingCollector<'_> {
                     let imported = specifier.imported.name();
                     let symbol = specifier.local.symbol_id();
                     match imported.as_str() {
-                        "useTranslation" if matches!(source, "react-i18next" | "next-i18next") => {
+                        "useTranslation" if is_react_i18next_binding_source(source) => {
                             self.bindings.use_translation.insert(symbol);
                         }
-                        "Trans" if matches!(source, "react-i18next" | "next-i18next") => {
+                        "Trans" if is_react_i18next_binding_source(source) => {
                             self.bindings.trans_components.insert(symbol);
                         }
-                        "getFixedT" if source == "i18next" => {
+                        "getFixedT"
+                            if source == "i18next" || is_project_i18next_wrapper(source) =>
+                        {
                             self.bindings.get_fixed_t.insert(symbol);
+                        }
+                        "i18n" if is_project_i18next_wrapper(source) => {
+                            self.bindings.i18next_instances.insert(symbol);
+                        }
+                        "t" => {
+                            self.bindings
+                                .translation_functions
+                                .insert(symbol, TranslationContext::default());
                         }
                         _ => {}
                     }
                 }
                 ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier)
-                    if source == "i18next" =>
+                    if source == "i18next" || is_project_i18next_wrapper(source) =>
                 {
                     self.bindings
                         .i18next_instances
                         .insert(specifier.local.symbol_id());
                 }
                 ImportDeclarationSpecifier::ImportNamespaceSpecifier(specifier)
-                    if source == "i18next" =>
+                    if source == "i18next" || is_project_i18next_wrapper(source) =>
                 {
                     self.bindings
                         .i18next_instances
@@ -675,6 +703,26 @@ mod tests {
         );
 
         assert!(analysis.usages.is_empty());
+    }
+
+    #[test]
+    fn resolves_project_i18next_wrapper_bindings() {
+        let analysis = analyze(
+            r#"
+                import { i18n, useTranslation } from '@/i18n';
+                const { t } = useTranslation(['create-house']);
+                const field = t('create-house:createHouse.fields.instruction');
+                const direct = i18n.t('common:buttons.save');
+            "#,
+        );
+
+        assert_eq!(
+            static_keys(&analysis),
+            [
+                "create-house:createHouse.fields.instruction",
+                "common:buttons.save"
+            ]
+        );
     }
 
     #[test]

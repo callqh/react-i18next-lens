@@ -19,7 +19,7 @@ Repository: [callqh/react-i18next-lens](https://github.com/callqh/react-i18next-
 Supported:
 
 - JavaScript, JSX, TypeScript, and TSX
-- `react-i18next`, `i18next`, and `next-i18next`
+- `react-i18next`, `i18next`, `next-i18next`, and project `i18n` wrapper modules
 - `useTranslation`, `t`, selector syntax, `i18next.t`, `getFixedT`, and `Trans`
 - i18next JSON v4 resources
 - static translation keys
