@@ -39,7 +39,7 @@ resolver. They are never guessed or treated as safe evidence for deletion.
 ## Editor features
 
 - source-locale messages as low-emphasis inlay hints
-- hover previews across locales
+- hover previews across locales with clickable links to each resource value
 - go to exact translation definition
 - missing and incomplete translation diagnostics
 - explicit code actions for supported safe edits

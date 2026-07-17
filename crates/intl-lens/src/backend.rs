@@ -9,6 +9,7 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
 use crate::analysis::{SourceAnalysis, TranslationUsage};
+use crate::catalog::CatalogEntry;
 use crate::configuration::configuration_files;
 use crate::domain::{ByteSpan, KeyResolution, TranslationKey};
 use crate::mutation::AddMissingKey;
@@ -354,11 +355,12 @@ impl LanguageServer for I18nBackend {
         }
         let mut markdown = format!("### 🌍 `{}`\n\n", key.canonical());
         for entry in translations {
-            markdown.push_str(&format!(
-                "**{}**: {}\n\n",
-                entry.locale,
-                entry.value.display()
-            ));
+            let line = snapshot.catalog.source(&entry.file).map_or_else(
+                || hover_translation_label(entry),
+                |source| hover_translation_markdown(entry, source),
+            );
+            markdown.push_str(&line);
+            markdown.push_str("\n\n");
         }
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -799,9 +801,59 @@ fn truncate(value: &str, max_chars: usize) -> String {
     )
 }
 
+fn hover_translation_markdown(entry: &CatalogEntry, source: &str) -> String {
+    let label = hover_translation_label(entry);
+    let Some(position) = byte_to_position(source, entry.value_span.start as usize) else {
+        return label;
+    };
+    let Ok(mut uri) = Url::from_file_path(&entry.file) else {
+        return label;
+    };
+    uri.set_fragment(Some(&format!("L{}", position.line + 1)));
+    format!("[{label}]({uri})")
+}
+
+fn hover_translation_label(entry: &CatalogEntry) -> String {
+    format!(
+        "**{}**: {}",
+        escape_markdown_link_text(&entry.locale),
+        escape_markdown_link_text(&entry.value.display())
+    )
+}
+
+fn escape_markdown_link_text(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
+        .replace(['\r', '\n'], " ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::{CatalogEntry, MessageValue};
+    use crate::domain::{KeyPath, Namespace};
+
+    #[test]
+    fn hover_translation_links_to_its_resource_value_line() {
+        let entry = CatalogEntry {
+            key: TranslationKey {
+                namespace: Namespace::new("common").unwrap(),
+                path: KeyPath::new("buttons.save").unwrap(),
+            },
+            locale: "en".to_string(),
+            value: MessageValue::String("Save".to_string()),
+            file: PathBuf::from("/tmp/locales/en/common.json"),
+            key_span: ByteSpan::new(4, 18),
+            value_span: ByteSpan::new(20, 26),
+        };
+
+        assert_eq!(
+            hover_translation_markdown(&entry, "{\n  \"buttons.save\": \"Save\"\n}"),
+            "[**en**: Save](file:///tmp/locales/en/common.json#L2)"
+        );
+    }
 
     #[test]
     fn converts_utf8_spans_to_utf16_ranges() {
