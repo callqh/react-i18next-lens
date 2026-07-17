@@ -15,9 +15,40 @@ use crate::domain::{ByteSpan, KeyResolution, TranslationKey};
 use crate::mutation::AddMissingKey;
 use crate::workspace::{Workspace, WorkspaceSnapshot};
 
+const ADD_MISSING_SOURCE_KEY_COMMAND: &str = "react-i18next-lens.addMissingSourceKey";
+const SELECT_INLAY_LOCALE_COMMAND: &str = "react-i18next-lens.selectInlayLocale";
+
+#[derive(Default)]
+struct InlayLocaleSelection {
+    selected: Option<String>,
+}
+
+impl InlayLocaleSelection {
+    fn resolve<'a>(&self, locales: &'a [String]) -> Option<&'a str> {
+        self.selected
+            .as_deref()
+            .and_then(|selected| {
+                locales
+                    .iter()
+                    .find(|locale| locale.as_str() == selected)
+                    .map(String::as_str)
+            })
+            .or_else(|| locales.first().map(String::as_str))
+    }
+
+    fn select(&mut self, locale: String, locales: &[String]) -> bool {
+        if !locales.contains(&locale) {
+            return false;
+        }
+        self.selected = Some(locale);
+        true
+    }
+}
+
 pub struct I18nBackend {
     client: Client,
     workspace: Arc<RwLock<Option<Arc<Workspace>>>>,
+    inlay_locale_selection: Arc<RwLock<InlayLocaleSelection>>,
     inlay_hint_refresh_supported: Arc<RwLock<bool>>,
     watched_files_dynamic_registration_supported: Arc<RwLock<bool>>,
     watched_files_relative_pattern_supported: Arc<RwLock<bool>>,
@@ -28,6 +59,7 @@ impl I18nBackend {
         Self {
             client,
             workspace: Arc::new(RwLock::new(None)),
+            inlay_locale_selection: Arc::new(RwLock::new(InlayLocaleSelection::default())),
             inlay_hint_refresh_supported: Arc::new(RwLock::new(false)),
             watched_files_dynamic_registration_supported: Arc::new(RwLock::new(false)),
             watched_files_relative_pattern_supported: Arc::new(RwLock::new(false)),
@@ -257,7 +289,10 @@ impl LanguageServer for I18nBackend {
                     },
                 )),
                 execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: vec!["react-i18next-lens.addMissingSourceKey".to_string()],
+                    commands: vec![
+                        ADD_MISSING_SOURCE_KEY_COMMAND.to_string(),
+                        SELECT_INLAY_LOCALE_COMMAND.to_string(),
+                    ],
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -434,7 +469,7 @@ impl LanguageServer for I18nBackend {
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
-        let actions = params
+        let mut actions = params
             .context
             .diagnostics
             .iter()
@@ -453,18 +488,36 @@ impl LanguageServer for I18nBackend {
                     diagnostics: Some(vec![diagnostic.clone()]),
                     command: Some(Command {
                         title: "Preview and add source key".to_string(),
-                        command: "react-i18next-lens.addMissingSourceKey".to_string(),
+                        command: ADD_MISSING_SOURCE_KEY_COMMAND.to_string(),
                         arguments: Some(vec![data.clone()]),
                     }),
                     ..Default::default()
                 }))
             })
             .collect::<Vec<_>>();
+        let uri = &params.text_document.uri;
+        if let Some((snapshot, _, _)) = self.key_at(uri, params.range.start).await {
+            if let Some(locale) = self.current_inlay_locale(&snapshot).await {
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: format!("Select inlay locale (current: {locale})"),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    command: Some(Command {
+                        title: "Select inlay locale".to_string(),
+                        command: SELECT_INLAY_LOCALE_COMMAND.to_string(),
+                        arguments: None,
+                    }),
+                    ..Default::default()
+                }));
+            }
+        }
         Ok((!actions.is_empty()).then_some(actions))
     }
 
     async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
-        if params.command != "react-i18next-lens.addMissingSourceKey" {
+        if params.command == SELECT_INLAY_LOCALE_COMMAND {
+            return self.select_inlay_locale().await;
+        }
+        if params.command != ADD_MISSING_SOURCE_KEY_COMMAND {
             return Ok(None);
         }
         let Some(argument) = params.arguments.first() else {
@@ -581,6 +634,9 @@ impl LanguageServer for I18nBackend {
         else {
             return Ok(None);
         };
+        let Some(inlay_locale) = self.current_inlay_locale(&snapshot).await else {
+            return Ok(None);
+        };
         let hints = analysis
             .usages
             .iter()
@@ -588,7 +644,7 @@ impl LanguageServer for I18nBackend {
                 let KeyResolution::Static(key) = &usage.resolution else {
                     return None;
                 };
-                let entry = snapshot.catalog.get(&snapshot.config.source_locale, key)?;
+                let entry = snapshot.catalog.get(&inlay_locale, key)?;
                 let range = byte_span_to_range(&document.content, usage.expression_span)?;
                 if !ranges_overlap(range, params.range) {
                     return None;
@@ -613,6 +669,62 @@ impl LanguageServer for I18nBackend {
 }
 
 impl I18nBackend {
+    async fn current_inlay_locale(&self, snapshot: &WorkspaceSnapshot) -> Option<String> {
+        self.inlay_locale_selection
+            .read()
+            .await
+            .resolve(&snapshot.config.locales)
+            .map(str::to_string)
+    }
+
+    async fn select_inlay_locale(&self) -> Result<Option<Value>> {
+        let Some(workspace) = self.current_workspace().await else {
+            return Ok(None);
+        };
+        let snapshot = workspace.snapshot();
+        let Some(current) = self.current_inlay_locale(&snapshot).await else {
+            return Ok(None);
+        };
+        let actions = snapshot
+            .config
+            .locales
+            .iter()
+            .map(|locale| MessageActionItem {
+                title: locale.clone(),
+                properties: Default::default(),
+            })
+            .collect::<Vec<_>>();
+        let selected = self
+            .client
+            .show_message_request(
+                MessageType::INFO,
+                format!("Select the locale used by inlay hints (current: {current})"),
+                Some(actions),
+            )
+            .await
+            .ok()
+            .flatten()
+            .map(|action| action.title);
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+
+        if !self
+            .inlay_locale_selection
+            .write()
+            .await
+            .select(selected.clone(), &snapshot.config.locales)
+        {
+            return Ok(None);
+        }
+        if *self.inlay_hint_refresh_supported.read().await {
+            if let Err(error) = self.client.inlay_hint_refresh().await {
+                tracing::warn!(?error, "inlay hint refresh failed after locale selection");
+            }
+        }
+        Ok(Some(Value::String(selected)))
+    }
+
     async fn key_at(
         &self,
         uri: &Url,
@@ -853,6 +965,19 @@ mod tests {
             hover_translation_markdown(&entry, "{\n  \"buttons.save\": \"Save\"\n}"),
             "[**en**: Save](file:///tmp/locales/en/common.json#L2)"
         );
+    }
+
+    #[test]
+    fn inlay_locale_defaults_to_first_configured_and_honors_selection() {
+        let locales = vec!["en".to_string(), "ja".to_string(), "zh-CN".to_string()];
+        let mut selection = InlayLocaleSelection::default();
+
+        assert_eq!(selection.resolve(&locales), Some("en"));
+        assert!(selection.select("ja".to_string(), &locales));
+        assert_eq!(selection.resolve(&locales), Some("ja"));
+        assert!(!selection.select("removed-locale".to_string(), &locales));
+        assert_eq!(selection.resolve(&locales), Some("ja"));
+        assert_eq!(selection.resolve(&locales[..1]), Some("en"));
     }
 
     #[test]

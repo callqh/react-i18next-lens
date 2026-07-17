@@ -17,8 +17,12 @@ The i18next grouping that qualifies a translation key through `useTranslation`, 
 _Avoid_: File prefix
 
 **Source locale**:
-The locale whose message is shown as the default inline explanation and used as the reference for translation analysis.
+The locale used as the reference for translation analysis and source-message diagnostics.
 _Avoid_: Default language
+
+**Inlay locale**:
+The configured locale whose messages are shown as inline explanations for the current language-server session. It defaults to the first configured locale and may be changed through an editor action without changing project configuration.
+_Avoid_: Treating the source locale as the only display locale, persisted Lens-only locale setting
 
 **Translation resource**:
 An i18next JSON v4 document containing nested or flat translation keys, including namespaces, plurals, interpolation values, arrays, and objects.
@@ -57,6 +61,7 @@ _Avoid_: Best-effort direct JSON writes, automatic cleanup
 - Translation coverage is based on keys physically present in each target locale, not merely values resolvable through i18next fallback.
 - When fallback configuration can resolve a physically missing key, diagnostics may report the effective fallback locale while still classifying the target locale as untranslated.
 - LSP, CLI, and MCP adapters may accept workspace path, configuration path, and operational settings such as log level, but must not redefine locale paths, source locale, or analysis semantics independently.
+- The LSP inlay locale is session-scoped operational state. It must resolve to a configured locale, defaults to the first configured locale, and never changes source-locale analysis semantics.
 - Automatic discovery may suggest configuration when exactly one common i18next layout is unambiguous; ambiguous candidates produce a configuration diagnostic instead of being selected silently.
 - LSP, CLI, and MCP adapters must resolve the same workspace configuration into the same analysis behavior.
 - The first release may add a missing static key to translation resources through an explicit mutation preview.

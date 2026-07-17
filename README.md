@@ -38,7 +38,8 @@ resolver. They are never guessed or treated as safe evidence for deletion.
 
 ## Editor features
 
-- source-locale messages as low-emphasis inlay hints
+- selected-locale messages as low-emphasis inlay hints
+- translation-key code action for selecting the inlay-hint locale
 - hover previews across locales with clickable links to each resource value
 - go to exact translation definition
 - missing and incomplete translation diagnostics
@@ -49,6 +50,12 @@ Zed exposes these features through standard LSP capabilities. It cannot replace
 the source key visually and reveal it only on selection; a future editor client
 with a decoration API can render that experience using the same core annotation
 data.
+
+The inlay-hint locale defaults to the first configured locale. To change it,
+place the cursor on a translation key, open Zed's Code Actions menu, choose
+`Select inlay locale`, and then choose one of the configured locales. The
+selection lasts for the current language-server session and refreshes visible
+inlay hints immediately.
 
 ## Configuration
 
