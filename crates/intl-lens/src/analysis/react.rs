@@ -17,14 +17,16 @@ use crate::domain::{ByteSpan, DynamicReason, KeyResolution, TranslationKey};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalyzerConfig {
     pub default_namespace: String,
-    pub namespace_separator: char,
+    pub namespace_separator: Option<char>,
+    pub key_separator: Option<char>,
 }
 
 impl Default for AnalyzerConfig {
     fn default() -> Self {
         Self {
             default_namespace: "translation".to_string(),
-            namespace_separator: ':',
+            namespace_separator: Some(':'),
+            key_separator: Some('.'),
         }
     }
 }
@@ -122,6 +124,8 @@ fn is_supported_source_type(path: &Path) -> bool {
 struct TranslationContext {
     namespace: Option<String>,
     key_prefix: Option<String>,
+    namespace_dynamic: bool,
+    key_prefix_dynamic: bool,
 }
 
 #[derive(Default)]
@@ -176,6 +180,18 @@ impl<'s> BindingCollector<'s> {
         (is_named_import || is_instance_method).then(|| TranslationContext {
             namespace: call.arguments.get(1).and_then(static_argument_value),
             key_prefix: call.arguments.get(2).and_then(static_argument_value),
+            namespace_dynamic: call.arguments.get(1).is_some()
+                && call
+                    .arguments
+                    .get(1)
+                    .and_then(static_argument_value)
+                    .is_none(),
+            key_prefix_dynamic: call.arguments.get(2).is_some()
+                && call
+                    .arguments
+                    .get(2)
+                    .and_then(static_argument_value)
+                    .is_none(),
         })
     }
 }
@@ -241,6 +257,18 @@ impl<'a> Visit<'a> for BindingCollector<'_> {
                     .get(1)
                     .and_then(argument_object)
                     .and_then(|object| object_string_property(object, "keyPrefix")),
+                namespace_dynamic: !call.arguments.is_empty()
+                    && call
+                        .arguments
+                        .first()
+                        .and_then(static_namespace_argument)
+                        .is_none(),
+                key_prefix_dynamic: call
+                    .arguments
+                    .get(1)
+                    .and_then(argument_object)
+                    .and_then(|object| object_property_expression(object, "keyPrefix"))
+                    .is_some_and(|value| static_expression_value(value).is_none()),
             }
         } else if let Some(context) = self.fixed_t_context(call) {
             context
@@ -329,8 +357,14 @@ impl<'c, 's> UsageExtractor<'c, 's> {
         };
 
         if let Some(options) = call.arguments.get(1).and_then(argument_object) {
-            if let Some(namespace) = object_string_property(options, "ns") {
-                context.namespace = Some(namespace);
+            if let Some(namespace) = object_property_expression(options, "ns") {
+                match static_expression_value(namespace) {
+                    Some(namespace) => {
+                        context.namespace = Some(namespace);
+                        context.namespace_dynamic = false;
+                    }
+                    None => context.namespace_dynamic = true,
+                }
             }
         }
 
@@ -342,12 +376,22 @@ impl<'c, 's> UsageExtractor<'c, 's> {
 
         match static_key_expression(expression) {
             Ok((raw_key, span)) => {
+                let explicit_namespace = self
+                    .config
+                    .namespace_separator
+                    .is_some_and(|separator| raw_key.contains(separator));
+                if context.key_prefix_dynamic || (context.namespace_dynamic && !explicit_namespace)
+                {
+                    self.push_dynamic(span, DynamicReason::AmbiguousNamespace);
+                    return;
+                }
                 let Some(key) = TranslationKey::from_source(
                     &raw_key,
                     context.namespace.as_deref(),
                     context.key_prefix.as_deref(),
                     &self.config.default_namespace,
                     self.config.namespace_separator,
+                    self.config.key_separator,
                 ) else {
                     return;
                 };
@@ -388,27 +432,58 @@ impl<'c, 's> UsageExtractor<'c, 's> {
         }
 
         let mut key = None;
+        let mut dynamic_key = None;
         let mut namespace = None;
+        let mut namespace_dynamic = false;
         for attribute in &element.attributes {
             let JSXAttributeItem::Attribute(attribute) = attribute else {
                 continue;
             };
             if attribute.is_identifier("i18nKey") {
                 key = jsx_static_attribute(attribute.value.as_ref());
+                if key.is_none() {
+                    dynamic_key = attribute.value.as_ref().map(|value| {
+                        let reason = match value {
+                            JSXAttributeValue::ExpressionContainer(container)
+                                if matches!(
+                                    container.expression,
+                                    JSXExpression::TemplateLiteral(_)
+                                ) =>
+                            {
+                                DynamicReason::InterpolatedTemplate
+                            }
+                            _ => DynamicReason::NonLiteralArgument,
+                        };
+                        (value.span(), reason)
+                    });
+                }
             } else if attribute.is_identifier("ns") {
                 namespace = jsx_static_attribute(attribute.value.as_ref()).map(|value| value.0);
+                namespace_dynamic = namespace.is_none();
             }
         }
 
         let Some((raw_key, span)) = key else {
+            if let Some((span, reason)) = dynamic_key {
+                self.push_dynamic(span, reason);
+            }
             return;
         };
+        let explicit_namespace = self
+            .config
+            .namespace_separator
+            .is_some_and(|separator| raw_key.contains(separator));
+        if namespace_dynamic && !explicit_namespace {
+            self.push_dynamic(span, DynamicReason::AmbiguousNamespace);
+            return;
+        }
         let Some(key) = TranslationKey::from_source(
             &raw_key,
             namespace.as_deref(),
             None,
             &self.config.default_namespace,
             self.config.namespace_separator,
+            self.config.key_separator,
         ) else {
             return;
         };
@@ -442,12 +517,19 @@ fn argument_object<'r, 'a>(argument: &'r Argument<'a>) -> Option<&'r ObjectExpre
 }
 
 fn object_string_property(object: &ObjectExpression<'_>, name: &str) -> Option<String> {
+    object_property_expression(object, name).and_then(static_expression_value)
+}
+
+fn object_property_expression<'a>(
+    object: &'a ObjectExpression<'a>,
+    name: &str,
+) -> Option<&'a Expression<'a>> {
     object.properties.iter().find_map(|property| {
         let property = property.as_property()?;
         property
             .key
             .is_specific_static_name(name)
-            .then(|| static_expression_value(&property.value))?
+            .then_some(&property.value)
     })
 }
 
@@ -553,7 +635,8 @@ mod tests {
     fn analyze(source: &str) -> SourceAnalysis {
         ReactSourceAnalyzer::new(AnalyzerConfig {
             default_namespace: "common".to_string(),
-            namespace_separator: ':',
+            namespace_separator: Some(':'),
+            key_separator: Some('.'),
         })
         .analyze(Path::new("component.tsx"), source)
     }
@@ -621,6 +704,24 @@ mod tests {
     }
 
     #[test]
+    fn resolves_get_fixed_t_namespace_and_prefix() {
+        let analysis = analyze(
+            r#"
+                import i18next, { getFixedT } from 'i18next';
+                const direct = getFixedT('en', 'common', 'buttons');
+                const instance = i18next.getFixedT(null, 'settings', 'labels');
+                direct('save');
+                instance('title');
+            "#,
+        );
+
+        assert_eq!(
+            static_keys(&analysis),
+            ["common:buttons.save", "settings:labels.title"]
+        );
+    }
+
+    #[test]
     fn resolves_trans_component() {
         let analysis = analyze(
             r#"
@@ -646,6 +747,39 @@ mod tests {
         assert_eq!(
             analysis.unresolved[0].reason,
             DynamicReason::InterpolatedTemplate
+        );
+    }
+
+    #[test]
+    fn does_not_guess_dynamic_namespace_or_key_prefix() {
+        let analysis = analyze(
+            r#"
+                import { useTranslation } from 'react-i18next';
+                const { t } = useTranslation(namespace, { keyPrefix: prefix });
+                t('save');
+            "#,
+        );
+        assert!(static_keys(&analysis).is_empty());
+        assert_eq!(analysis.unresolved.len(), 1);
+        assert_eq!(
+            analysis.unresolved[0].reason,
+            DynamicReason::AmbiguousNamespace
+        );
+    }
+
+    #[test]
+    fn retains_dynamic_trans_keys_as_unresolved() {
+        let analysis = analyze(
+            r#"
+                import { Trans } from 'react-i18next';
+                export const View = ({ keyName }) => <Trans i18nKey={keyName} />;
+            "#,
+        );
+        assert!(static_keys(&analysis).is_empty());
+        assert_eq!(analysis.unresolved.len(), 1);
+        assert_eq!(
+            analysis.unresolved[0].reason,
+            DynamicReason::NonLiteralArgument
         );
     }
 }

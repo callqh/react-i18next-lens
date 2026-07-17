@@ -2,9 +2,14 @@
 
 ## Status
 
-This document defines the target architecture for the breaking fork of
+This document defines the implemented architecture for the breaking fork of
 `intl-lens`. The product is intentionally narrowed to React applications that
 use `react-i18next`, `i18next`, or `next-i18next`.
+
+The core migration is complete: Oxc analysis, static configuration,
+span-preserving JSON catalog, audit, mutation planning, and immutable workspace
+snapshots are shared by the LSP, CLI, and MCP adapters. Dynamic key resolution
+remains an explicit future feature.
 
 The public product name is **React i18next Lens** and machine-facing names use
 `react-i18next-lens`.
@@ -196,10 +201,11 @@ Configuration source suffixes:
 ```
 
 Configuration is statically interpreted with Oxc. Project code is never
-executed by the editor tool. CommonJS exports, ESM default exports,
-`defineConfig`, `i18next.init`, literal local bindings, object spreads,
-`path.resolve`, and statically resolvable local imports are normalized into one
-`WorkspaceConfig`.
+executed by the editor tool. Direct CommonJS exports, ESM default exports,
+`defineConfig`, `i18next.init`, literal arrays and strings, `path.resolve`, and
+dynamic-import resource templates are normalized into one `WorkspaceConfig`.
+Values hidden behind runtime branches, imported modules, or computed
+expressions require Lens overrides.
 
 Dynamic values produce actionable diagnostics and may be overridden in the Lens
 configuration. `sourceLocale` is required after normalization and never silently

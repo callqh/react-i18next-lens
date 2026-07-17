@@ -5,6 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.5"
 edition = "2021"
+rust-version = "1.90"
 license = "MIT"
 authors = ["callqh", "Trong Nguyen"]
 repository = "https://github.com/callqh/react-i18next-lens"
@@ -25,7 +26,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Utils
 anyhow = "1"
-dashmap = "6"
 regex = "1"
 globset = "0.4"
 walkdir = "2"
@@ -36,6 +36,7 @@ oxc_parser = "=0.110.0"
 oxc_semantic = "=0.110.0"
 oxc_span = "=0.110.0"
 arc-swap = "1"
+sha2 = "0.10"
 
 # Zed extension
 zed_extension_api = "0.7"

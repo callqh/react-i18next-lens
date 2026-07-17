@@ -70,8 +70,30 @@ than executed. Configuration sources may use:
 Lens-specific overrides belong in the same project file. `sourceLocale` must be
 resolved explicitly; the runtime does not silently assume English.
 
+For a project without an existing config, declare the normalized values
+directly:
+
+```json
+{
+  "sourceLocale": "en",
+  "locales": ["en", "ja", "zh-CN"],
+  "resources": ["public/locales/{locale}/{namespace}.json"],
+  "defaultNamespace": "common"
+}
+```
+
+Resource templates use `{locale}` and `{namespace}`. i18next `{{lng}}` and
+`{{ns}}` placeholders found in an extended config are normalized to those
+names. Physical locale files determine coverage; `fallbackLng` does not make a
+missing target-locale message count as translated.
+
 Translation resources remain strict JSON regardless of the configuration file
 extension.
+
+The core publishes immutable workspace generations. Configuration, open
+documents, Oxc analysis, JSON spans, audit results, and mutation plans cannot be
+mixed across reloads. Adding a missing key uses preview/apply with generation
+and SHA-256 checks; existing messages are never overwritten.
 
 ## Build
 
@@ -88,6 +110,22 @@ target/release/react-i18next-lens
 target/release/react-i18next-lens-cli
 target/release/react-i18next-lens-mcp
 ```
+
+Audit and mutation examples:
+
+```sh
+react-i18next-lens-cli audit
+
+# Preview only; prints complete before/after JSON edits.
+react-i18next-lens-cli fix common:buttons.save --default-value Save
+
+# Explicitly apply the same preview operation.
+react-i18next-lens-cli fix common:buttons.save --default-value Save --apply
+```
+
+The MCP adapter exposes separate `preview_add_missing_key` and
+`apply_mutation` tools. Apply accepts only a server-issued preview ID and still
+revalidates the complete workspace state and target-file SHA-256 fingerprints.
 
 For local Zed development, put `react-i18next-lens` on the environment `PATH`
 seen by Zed, then install this repository as a dev extension.

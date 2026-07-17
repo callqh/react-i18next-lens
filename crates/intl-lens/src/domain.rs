@@ -60,16 +60,20 @@ impl TranslationKey {
         contextual_namespace: Option<&str>,
         key_prefix: Option<&str>,
         default_namespace: &str,
-        namespace_separator: char,
+        namespace_separator: Option<char>,
+        key_separator: Option<char>,
     ) -> Option<Self> {
-        let (namespace, raw_path) = raw.split_once(namespace_separator).map_or(
-            (contextual_namespace.unwrap_or(default_namespace), raw),
-            |parts| parts,
-        );
+        let (namespace, raw_path) = namespace_separator
+            .and_then(|separator| raw.split_once(separator))
+            .map_or(
+                (contextual_namespace.unwrap_or(default_namespace), raw),
+                |parts| parts,
+            );
 
+        let raw_path = normalize_key_path(raw_path, key_separator);
         let path = match key_prefix {
             Some(prefix) if !prefix.is_empty() && !raw_path.is_empty() => {
-                format!("{prefix}.{raw_path}")
+                format!("{}.{}", normalize_key_path(prefix, key_separator), raw_path)
             }
             _ => raw_path.to_string(),
         };
@@ -83,6 +87,13 @@ impl TranslationKey {
     pub fn canonical(&self) -> String {
         format!("{}:{}", self.namespace.as_str(), self.path.as_str())
     }
+}
+
+fn normalize_key_path(value: &str, separator: Option<char>) -> String {
+    separator.map_or_else(
+        || value.to_string(),
+        |separator| value.split(separator).collect::<Vec<_>>().join("."),
+    )
 }
 
 impl fmt::Display for TranslationKey {
@@ -119,7 +130,8 @@ mod tests {
             Some("settings"),
             None,
             "translation",
-            ':',
+            Some(':'),
+            Some('.'),
         )
         .unwrap();
 
@@ -133,10 +145,39 @@ mod tests {
             Some("common"),
             Some("buttons"),
             "translation",
-            ':',
+            Some(':'),
+            Some('.'),
         )
         .unwrap();
 
         assert_eq!(key.canonical(), "common:buttons.save");
+    }
+
+    #[test]
+    fn honors_custom_and_disabled_separators() {
+        let custom = TranslationKey::from_source(
+            "common|buttons/save",
+            None,
+            None,
+            "translation",
+            Some('|'),
+            Some('/'),
+        )
+        .unwrap();
+        assert_eq!(custom.canonical(), "common:buttons.save");
+
+        let disabled_namespace = TranslationKey::from_source(
+            "common:buttons.save",
+            None,
+            None,
+            "translation",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            disabled_namespace.canonical(),
+            "translation:common:buttons.save"
+        );
     }
 }

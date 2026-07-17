@@ -1,15 +1,18 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use anyhow::{anyhow, Context, Result};
-use react_i18next_lens::audit::{
-    AuditReport, AuditResult, FixSuggestion, MissingTranslation, PlaceholderIssue,
-};
-use react_i18next_lens::config::I18nConfig;
-use react_i18next_lens::i18n::store::TranslationStore;
+use react_i18next_lens::audit::{AuditReport, FixSuggestion, MissingTranslation, PlaceholderIssue};
+use react_i18next_lens::domain::TranslationKey;
+use react_i18next_lens::mutation::{AddMissingKey, MutationPreview};
+use react_i18next_lens::workspace::Workspace;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use walkdir::WalkDir;
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
@@ -70,6 +73,20 @@ struct ValidatePlaceholdersParams {
     key: String,
 }
 
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct PreviewMutationParams {
+    workspace: Option<PathBuf>,
+    key: String,
+    default_value: Option<String>,
+    translations: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplyMutationParams {
+    preview_id: String,
+}
+
 #[derive(Debug, Serialize)]
 struct ServerInfo {
     name: &'static str,
@@ -110,11 +127,23 @@ struct FixSuggestionResponse {
 
 struct McpServer {
     workspace_root: PathBuf,
+    next_preview: AtomicU64,
+    previews: Mutex<std::collections::HashMap<String, StoredPreview>>,
+}
+
+struct StoredPreview {
+    root: PathBuf,
+    workspace_fingerprint: String,
+    preview: MutationPreview,
 }
 
 impl McpServer {
     fn new(workspace_root: PathBuf) -> Self {
-        Self { workspace_root }
+        Self {
+            workspace_root,
+            next_preview: AtomicU64::new(1),
+            previews: Mutex::new(std::collections::HashMap::new()),
+        }
     }
 
     fn handle_request(&self, request: JsonRpcRequest) -> JsonRpcResponse {
@@ -190,6 +219,14 @@ impl McpServer {
                 let arguments: ValidatePlaceholdersParams = serde_json::from_value(arguments)?;
                 self.validate_placeholders(arguments)?
             }
+            "preview_add_missing_key" => {
+                let arguments: PreviewMutationParams = serde_json::from_value(arguments)?;
+                self.preview_add_missing_key(arguments)?
+            }
+            "apply_mutation" => {
+                let arguments: ApplyMutationParams = serde_json::from_value(arguments)?;
+                self.apply_mutation(arguments)?
+            }
             name => return Err(anyhow!("Unknown tool: {name}")),
         };
 
@@ -237,11 +274,12 @@ impl McpServer {
 
         let contents = match uri {
             "react-i18next-lens://config" => {
-                let config = I18nConfig::load_from_workspace(&self.workspace_root);
+                let workspace = self.load_workspace(&self.workspace_root)?;
+                let snapshot = workspace.snapshot();
                 vec![ResourceContents {
                     uri: uri.to_string(),
                     mime_type: "application/json".to_string(),
-                    text: serde_json::to_string_pretty(&config)?,
+                    text: serde_json::to_string_pretty(&*snapshot.config)?,
                 }]
             }
             "react-i18next-lens://audit/latest" => {
@@ -253,11 +291,12 @@ impl McpServer {
                 }]
             }
             "react-i18next-lens://translations/index" => {
-                let (_, store) = self.load_store(&self.workspace_root);
+                let workspace = self.load_workspace(&self.workspace_root)?;
+                let snapshot = workspace.snapshot();
                 let payload = json!({
                     "workspace": self.workspace_root,
-                    "locales": store.get_locales(),
-                    "total_keys": store.get_all_keys().len()
+                    "locales": snapshot.config.locales,
+                    "total_keys": snapshot.catalog.entries().map(|entry| entry.key.clone()).collect::<std::collections::HashSet<_>>().len()
                 });
                 vec![ResourceContents {
                     uri: uri.to_string(),
@@ -421,23 +460,129 @@ impl McpServer {
         }))
     }
 
+    fn preview_add_missing_key(&self, params: PreviewMutationParams) -> Result<Value> {
+        if params.key.trim().is_empty() {
+            return Err(anyhow!("'key' is required"));
+        }
+        let root = self.resolve_workspace(params.workspace);
+        let workspace_fingerprint = fingerprint_workspace(&root)?;
+        let workspace = self.load_workspace(&root)?;
+        let snapshot = workspace.snapshot();
+        let key = TranslationKey::from_source(
+            &params.key,
+            None,
+            None,
+            &snapshot.config.default_namespace,
+            snapshot.config.namespace_separator,
+            snapshot.config.key_separator,
+        )
+        .ok_or_else(|| anyhow!("invalid translation key: {}", params.key))?;
+        let preview = workspace
+            .preview_mutation(&AddMissingKey {
+                key,
+                default_value: params.default_value,
+                translations: params.translations,
+            })
+            .map_err(|error| anyhow!("mutation preview failed: {error:?}"))?;
+        let preview_id = format!(
+            "preview-{}",
+            self.next_preview.fetch_add(1, Ordering::Relaxed)
+        );
+        if fingerprint_workspace(&root)? != workspace_fingerprint {
+            return Err(anyhow!(
+                "workspace changed while creating the preview; try again"
+            ));
+        }
+        self.previews
+            .lock()
+            .map_err(|_| anyhow!("preview store is unavailable"))?
+            .insert(
+                preview_id.clone(),
+                StoredPreview {
+                    root,
+                    workspace_fingerprint,
+                    preview: preview.clone(),
+                },
+            );
+        Ok(json!({ "preview_id": preview_id, "preview": preview }))
+    }
+
+    fn apply_mutation(&self, params: ApplyMutationParams) -> Result<Value> {
+        let stored = self
+            .previews
+            .lock()
+            .map_err(|_| anyhow!("preview store is unavailable"))?
+            .remove(&params.preview_id)
+            .ok_or_else(|| anyhow!("unknown or already applied preview: {}", params.preview_id))?;
+        if fingerprint_workspace(&stored.root)? != stored.workspace_fingerprint {
+            return Err(anyhow!(
+                "workspace changed since preview; create a new mutation preview"
+            ));
+        }
+        let workspace = self.load_workspace(&stored.root)?;
+        let generation = workspace
+            .apply_mutation(&stored.preview)
+            .map_err(|error| anyhow!("mutation apply failed: {error:?}"))?;
+        Ok(json!({
+            "preview_id": params.preview_id,
+            "applied": true,
+            "generation": generation.value(),
+            "files_changed": stored.preview.edits.len()
+        }))
+    }
+
     fn resolve_workspace(&self, override_path: Option<PathBuf>) -> PathBuf {
         override_path.unwrap_or_else(|| self.workspace_root.clone())
     }
 
     fn build_report(&self, workspace: &Path) -> Result<AuditReport> {
-        let (config, store) = self.load_store(workspace);
-        let mut audit = AuditResult::new(workspace.to_path_buf(), config, store);
-        audit.scan_codebase();
-        Ok(audit.generate_report())
+        let workspace = self.load_workspace(workspace)?;
+        let snapshot = workspace.snapshot();
+        Ok((*snapshot.audit).clone())
     }
 
-    fn load_store(&self, workspace: &Path) -> (I18nConfig, TranslationStore) {
-        let config = I18nConfig::load_from_workspace(workspace);
-        let store = TranslationStore::new(workspace.to_path_buf());
-        store.scan_and_load_config(&config);
-        (config, store)
+    fn load_workspace(&self, root: &Path) -> Result<Workspace> {
+        Workspace::load(root.to_path_buf()).map_err(|failure| {
+            anyhow!(
+                "configuration failed: {}",
+                failure
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        })
     }
+}
+
+fn fingerprint_workspace(root: &Path) -> Result<String> {
+    let mut files = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            !entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| matches!(name, ".git" | "node_modules" | "target"))
+        })
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.into_path())
+        .collect::<Vec<_>>();
+    files.sort();
+    let mut digest = Sha256::new();
+    for file in files {
+        let relative = file.strip_prefix(root).unwrap_or(&file);
+        digest.update(relative.to_string_lossy().as_bytes());
+        digest.update([0]);
+        digest.update(
+            std::fs::read(&file)
+                .with_context(|| format!("failed to fingerprint {}", file.display()))?,
+        );
+        digest.update([0]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn strip_missing_suggestions(items: &[MissingTranslation]) -> Vec<Value> {
@@ -456,21 +601,23 @@ fn strip_missing_suggestions(items: &[MissingTranslation]) -> Vec<Value> {
 }
 
 fn find_locale_file(workspace: &Path, locale: &str) -> Option<PathBuf> {
-    let config = I18nConfig::load_from_workspace(workspace);
-
-    for locale_path in config.locale_paths {
-        let base = workspace.join(locale_path);
-        if !base.exists() {
-            continue;
-        }
-
-        let candidate = base.join(format!("{}.json", locale));
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-
-    None
+    let core = Workspace::load(workspace.to_path_buf()).ok()?;
+    let snapshot = core.snapshot();
+    let file = snapshot
+        .catalog
+        .entries()
+        .find(|entry| entry.locale == locale)
+        .map(|entry| entry.file.clone())
+        .or_else(|| {
+            snapshot.config.resource_patterns.first().map(|pattern| {
+                workspace.join(
+                    pattern
+                        .replace("{locale}", locale)
+                        .replace("{namespace}", &snapshot.config.default_namespace),
+                )
+            })
+        });
+    file
 }
 
 fn tool_definitions() -> Vec<ToolDefinition> {
@@ -522,6 +669,29 @@ fn tool_definitions() -> Vec<ToolDefinition> {
                     "workspace": { "type": "string" },
                     "key": { "type": "string" }
                 }
+            }),
+        },
+        ToolDefinition {
+            name: "preview_add_missing_key",
+            description: "Preview a safe add-missing-key mutation and return before/after edits plus a preview_id without writing files.",
+            input_schema: json!({
+                "type": "object",
+                "required": ["key"],
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "key": { "type": "string" },
+                    "default_value": { "type": "string" },
+                    "translations": { "type": "object", "additionalProperties": { "type": "string" } }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "apply_mutation",
+            description: "Explicitly apply a previous preview after generation and fingerprint validation.",
+            input_schema: json!({
+                "type": "object",
+                "required": ["preview_id"],
+                "properties": { "preview_id": { "type": "string" } }
             }),
         },
     ]
@@ -610,7 +780,7 @@ mod tests {
     #[test]
     fn serializes_tool_definitions() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 6);
         assert_eq!(tools[0].name, "audit_i18n");
     }
 
@@ -660,5 +830,22 @@ mod tests {
         let text = String::from_utf8(output).expect("utf8 output");
         assert!(text.starts_with("Content-Length: "));
         assert!(text.contains("\r\n\r\n{\"jsonrpc\":\"2.0\""));
+    }
+
+    #[test]
+    fn workspace_fingerprint_changes_with_workspace_content() {
+        let root = std::env::temp_dir().join(format!(
+            "react-i18next-lens-mcp-fingerprint-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("i18next.ts");
+        std::fs::write(&file, "export default {};").unwrap();
+        let before = fingerprint_workspace(&root).unwrap();
+        std::fs::write(&file, "export default { fallbackLng: 'en' };").unwrap();
+        let after = fingerprint_workspace(&root).unwrap();
+
+        assert_ne!(before, after);
+        std::fs::remove_dir_all(root).ok();
     }
 }

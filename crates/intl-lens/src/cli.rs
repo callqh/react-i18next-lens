@@ -1,14 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use react_i18next_lens::audit::AuditResult;
-use react_i18next_lens::config::I18nConfig;
-use react_i18next_lens::i18n::store::TranslationStore;
-use react_i18next_lens::scanner::CodeScanner;
+use react_i18next_lens::analysis::{AnalyzerConfig, ReactSourceAnalyzer};
+use react_i18next_lens::domain::KeyResolution;
+use react_i18next_lens::domain::TranslationKey;
+use react_i18next_lens::mutation::AddMissingKey;
+use react_i18next_lens::workspace::Workspace;
 
 #[derive(Parser)]
 #[command(name = "react-i18next-lens-cli")]
@@ -50,9 +51,20 @@ enum Commands {
     },
     /// Fix issues automatically (with approval)
     Fix {
-        /// Dry run - show what would be changed without making changes
+        /// Canonical translation key, for example common:buttons.save
+        key: String,
+
+        /// Initial source-locale value; defaults to the canonical key placeholder
         #[arg(long)]
-        dry_run: bool,
+        default_value: Option<String>,
+
+        /// Real target translation in locale=value form; may be repeated
+        #[arg(long = "translation")]
+        translations: Vec<String>,
+
+        /// Apply the displayed preview. Without this flag no files are changed.
+        #[arg(long)]
+        apply: bool,
     },
 }
 
@@ -87,8 +99,13 @@ async fn main() -> anyhow::Result<()> {
         Commands::Check { files } => {
             run_check(&cli.workspace, files, cli.format, cli.output).await?;
         }
-        Commands::Fix { dry_run } => {
-            run_fix(&cli.workspace, dry_run).await?;
+        Commands::Fix {
+            key,
+            default_value,
+            translations,
+            apply,
+        } => {
+            run_fix(&cli.workspace, key, default_value, translations, apply).await?;
         }
     }
 
@@ -110,18 +127,20 @@ async fn run_audit(
     );
 
     pb.set_message("Loading configuration...");
-    let config = I18nConfig::load_from_workspace(workspace);
-
-    pb.set_message("Scanning translation files...");
-    let store = TranslationStore::new(workspace.to_path_buf());
-    store.scan_and_load_config(&config);
-
-    pb.set_message("Scanning codebase...");
-    let mut result = AuditResult::new(workspace.to_path_buf(), config, store);
-    result.scan_codebase();
-
-    pb.set_message("Generating report...");
-    let mut report = result.generate_report();
+    let core = Workspace::load(workspace.to_path_buf()).map_err(|failure| {
+        anyhow::anyhow!(
+            "configuration failed: {}",
+            failure
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    })?;
+    let snapshot = core.snapshot();
+    pb.set_message("Analyzing React sources and JSON resources...");
+    let mut report = (*snapshot.audit).clone();
 
     // Filter by missing_in if specified
     if let Some(locales_str) = missing_in {
@@ -164,31 +183,52 @@ async fn run_check(
     format: OutputFormat,
     output: Option<PathBuf>,
 ) -> anyhow::Result<()> {
-    let config = I18nConfig::load_from_workspace(workspace);
-    let scanner = CodeScanner::new(config.default_namespace.as_deref());
-
-    let mut all_keys = Vec::new();
+    let core = Workspace::load(workspace.to_path_buf())
+        .map_err(|failure| anyhow::anyhow!("configuration failed: {:?}", failure.diagnostics))?;
+    let snapshot = core.snapshot();
+    let analyzer = ReactSourceAnalyzer::new(AnalyzerConfig {
+        default_namespace: snapshot.config.default_namespace.clone(),
+        namespace_separator: snapshot.config.namespace_separator,
+        key_separator: snapshot.config.key_separator,
+    });
+    let mut all_keys: Vec<(PathBuf, usize, String)> = Vec::new();
 
     for file in files {
         let content = std::fs::read_to_string(&file)?;
-        let occurrences = scanner.scan_content(&content);
-        for occ in occurrences {
-            all_keys.push((file.clone(), occ));
+        let analysis = analyzer.analyze(&file, &content);
+        for usage in analysis.usages {
+            if let KeyResolution::Static(key) = usage.resolution {
+                let line = content[..usage.expression_span.start as usize]
+                    .bytes()
+                    .filter(|byte| *byte == b'\n')
+                    .count();
+                all_keys.push((file.clone(), line, key.canonical()));
+            }
         }
     }
-
-    // Load translations to check existence
-    let store = TranslationStore::new(workspace.to_path_buf());
-    store.scan_and_load_config(&config);
 
     let mut missing = Vec::new();
     let mut found = Vec::new();
 
-    for (file, occ) in all_keys {
-        if store.key_exists(&occ.key) {
-            found.push((file, occ));
+    for (file, line, key) in all_keys {
+        let exists = react_i18next_lens::domain::TranslationKey::from_source(
+            &key,
+            None,
+            None,
+            &snapshot.config.default_namespace,
+            snapshot.config.namespace_separator,
+            snapshot.config.key_separator,
+        )
+        .is_some_and(|identity| {
+            snapshot
+                .catalog
+                .get(&snapshot.config.source_locale, &identity)
+                .is_some()
+        });
+        if exists {
+            found.push((file, line, key));
         } else {
-            missing.push((file, occ));
+            missing.push((file, line, key));
         }
     }
 
@@ -202,12 +242,12 @@ async fn run_check(
                     "{}",
                     format!("❌ Missing Keys ({}):", missing.len()).red().bold()
                 );
-                for (file, occ) in &missing {
+                for (file, line, key) in &missing {
                     println!(
                         "  {}:{} {}",
                         file.display().to_string().cyan(),
-                        occ.line + 1,
-                        occ.key.yellow()
+                        line + 1,
+                        key.yellow()
                     );
                 }
                 println!();
@@ -218,12 +258,12 @@ async fn run_check(
                     "{}",
                     format!("✓ Found Keys ({})", found.len()).green().bold()
                 );
-                for (file, occ) in &found {
+                for (file, line, key) in &found {
                     println!(
                         "  {}:{} {}",
                         file.display().to_string().dimmed(),
-                        occ.line + 1,
-                        occ.key.dimmed()
+                        line + 1,
+                        key.dimmed()
                     );
                 }
             }
@@ -234,15 +274,15 @@ async fn run_check(
         }
         OutputFormat::Json => {
             let json = serde_json::json!({
-                "missing": missing.iter().map(|(f, o)| serde_json::json!({
+                "missing": missing.iter().map(|(f, line, key)| serde_json::json!({
                     "file": f,
-                    "line": o.line + 1,
-                    "key": o.key,
+                    "line": line + 1,
+                    "key": key,
                 })).collect::<Vec<_>>(),
-                "found": found.iter().map(|(f, o)| serde_json::json!({
+                "found": found.iter().map(|(f, line, key)| serde_json::json!({
                     "file": f,
-                    "line": o.line + 1,
-                    "key": o.key,
+                    "line": line + 1,
+                    "key": key,
                 })).collect::<Vec<_>>(),
             });
             let output_str = serde_json::to_string_pretty(&json)?;
@@ -261,12 +301,12 @@ async fn run_check(
 
             if !missing.is_empty() {
                 md.push_str(&format!("## ❌ Missing Keys ({}):\n\n", missing.len()));
-                for (file, occ) in &missing {
+                for (file, line, key) in &missing {
                     md.push_str(&format!(
                         "- `{}:{}` - `{}`\n",
                         file.display(),
-                        occ.line + 1,
-                        occ.key
+                        line + 1,
+                        key
                     ));
                 }
                 md.push('\n');
@@ -274,12 +314,12 @@ async fn run_check(
 
             if !found.is_empty() {
                 md.push_str(&format!("## ✓ Found Keys ({}):\n\n", found.len()));
-                for (file, occ) in &found {
+                for (file, line, key) in &found {
                     md.push_str(&format!(
                         "- `{}:{}` - `{}`\n",
                         file.display(),
-                        occ.line + 1,
-                        occ.key
+                        line + 1,
+                        key
                     ));
                 }
             }
@@ -299,9 +339,57 @@ async fn run_check(
     Ok(())
 }
 
-async fn run_fix(_workspace: &Path, _dry_run: bool) -> anyhow::Result<()> {
-    println!("Fix command is coming soon!");
-    println!("This will suggest or automatically apply fixes for missing translations.");
+async fn run_fix(
+    workspace: &Path,
+    raw_key: String,
+    default_value: Option<String>,
+    translation_args: Vec<String>,
+    apply: bool,
+) -> anyhow::Result<()> {
+    let core = Workspace::load(workspace.to_path_buf())
+        .map_err(|failure| anyhow::anyhow!("configuration failed: {:?}", failure.diagnostics))?;
+    let snapshot = core.snapshot();
+    let key = TranslationKey::from_source(
+        &raw_key,
+        None,
+        None,
+        &snapshot.config.default_namespace,
+        snapshot.config.namespace_separator,
+        snapshot.config.key_separator,
+    )
+    .ok_or_else(|| anyhow::anyhow!("invalid translation key: {raw_key}"))?;
+    let translations = translation_args
+        .into_iter()
+        .map(|argument| {
+            argument
+                .split_once('=')
+                .map(|(locale, value)| (locale.to_string(), value.to_string()))
+                .ok_or_else(|| anyhow::anyhow!("translation must use locale=value: {argument}"))
+        })
+        .collect::<anyhow::Result<HashMap<_, _>>>()?;
+    let preview = core
+        .preview_mutation(&AddMissingKey {
+            key,
+            default_value,
+            translations,
+        })
+        .map_err(|error| anyhow::anyhow!("mutation preview failed: {error:?}"))?;
+
+    println!(
+        "Mutation preview (generation {}):",
+        preview.generation.value()
+    );
+    for edit in &preview.edits {
+        println!("\n--- {} (before)\n{}", edit.file.display(), edit.before);
+        println!("+++ {} (after)\n{}", edit.file.display(), edit.after);
+    }
+    if apply {
+        core.apply_mutation(&preview)
+            .map_err(|error| anyhow::anyhow!("mutation apply failed: {error:?}"))?;
+        println!("\nApplied {} file edit(s).", preview.edits.len());
+    } else {
+        println!("\nPreview only. Re-run with --apply to write these edits.");
+    }
     Ok(())
 }
 
