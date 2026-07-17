@@ -185,8 +185,9 @@ dynamic usages make an unused result provisional.
 
 ## Configuration
 
-`react-i18next-lens.json` is the project-local entry point. It may extend an
-existing i18next or next-i18next configuration:
+The zero-configuration path discovers exactly one root-level
+`next-i18next.config.*`, `i18next.config.*`, or `i18n.config.*` source. An
+optional `react-i18next-lens.json` may select a source or provide overrides:
 
 ```json
 {
@@ -211,8 +212,9 @@ Dynamic values produce actionable diagnostics and may be overridden in the Lens
 configuration. `sourceLocale` is required after normalization and never silently
 defaults to English.
 
-Automatic locale discovery is an initializer and diagnostic aid only. A running
-workspace uses explicit normalized configuration so LSP, CLI, and MCP agree.
+Automatic source discovery feeds the same explicit normalized configuration to
+LSP, CLI, and MCP. Ambiguous sources produce a diagnostic instead of being
+selected silently.
 
 ## Coherent workspace state
 

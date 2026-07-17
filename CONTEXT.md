@@ -47,8 +47,8 @@ _Avoid_: Best-effort direct JSON writes, automatic cleanup
 - Dynamic key evaluation is a planned feature; the current architecture must preserve this extension point without guessing runtime values.
 - Locale resource discovery is an initialization aid, not a runtime source of truth.
 - Runtime analysis uses explicit workspace configuration for locale paths, source locale, and resource layout.
-- The project-root `react-i18next-lens.json` file is the single source of truth for domain configuration.
-- `react-i18next-lens.json` may extend an existing i18next or next-i18next configuration source and contain only Lens-specific settings or explicit overrides for values that cannot be resolved statically.
+- A single unambiguous root-level `next-i18next.config.*`, `i18next.config.*`, or `i18n.config.*` source is discovered automatically and normalized as the workspace configuration.
+- The optional project-root `react-i18next-lens.json` file may select a configuration source or provide Lens-specific overrides when discovery or static interpretation is insufficient.
 - Configuration sources support `.js`, `.jsx`, `.cjs`, `.mjs`, `.ts`, `.tsx`, `.cts`, `.mts`, and `.json`.
 - Static configuration analysis supports common CommonJS, ESM, `defineConfig`, and `i18next.init` forms; project configuration code is never executed.
 - Values that remain dynamic after static analysis produce configuration diagnostics and require explicit overrides.

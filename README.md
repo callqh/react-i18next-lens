@@ -52,7 +52,12 @@ data.
 
 ## Configuration
 
-The project entry point is `react-i18next-lens.json`:
+For standard projects, no Lens-specific configuration is required. The server
+automatically discovers exactly one root-level `next-i18next.config.*`,
+`i18next.config.*`, or `i18n.config.*` source.
+
+Use the optional `react-i18next-lens.json` only when discovery is ambiguous or
+dynamic project values need static overrides:
 
 ```json
 {
@@ -67,8 +72,9 @@ than executed. Configuration sources may use:
 .js .jsx .cjs .mjs .ts .tsx .cts .mts .json
 ```
 
-Lens-specific overrides belong in the same project file. `sourceLocale` must be
-resolved explicitly; the runtime does not silently assume English.
+Lens-specific overrides belong in that optional project file. `sourceLocale`
+must still resolve from the existing i18next config or an explicit override;
+the runtime does not silently assume English.
 
 For a project without an existing config, declare the normalized values
 directly:

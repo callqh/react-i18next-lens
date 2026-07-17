@@ -13,6 +13,11 @@ use serde::Deserialize;
 
 use crate::pathing::resolve_within_root;
 
+const SUPPORTED_CONFIG_EXTENSIONS: &[&str] =
+    &["js", "jsx", "cjs", "mjs", "ts", "tsx", "cts", "mts", "json"];
+const DISCOVERABLE_CONFIG_STEMS: &[&str] =
+    &["next-i18next.config", "i18next.config", "i18n.config"];
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceConfig {
@@ -64,39 +69,102 @@ struct ConfigFacts {
     unresolved_fields: HashSet<String>,
 }
 
+#[derive(Debug)]
+enum ConfigurationDiscoveryError {
+    NotFound,
+    Ambiguous(Vec<PathBuf>),
+}
+
+impl ConfigurationDiscoveryError {
+    fn message(&self) -> String {
+        match self {
+            Self::NotFound =>
+                "no supported i18next configuration was discovered; add a standard next-i18next.config.*, i18next.config.*, or i18n.config.* file, or use optional react-i18next-lens.json overrides"
+                    .to_string(),
+            Self::Ambiguous(candidates) => format!(
+                "multiple i18next configuration files were discovered: {}; select one with react-i18next-lens.json extends",
+                candidates
+                    .iter()
+                    .map(|path| path.file_name().unwrap_or_default().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+}
+
 impl WorkspaceConfig {
     pub fn load(root: &Path) -> ConfigLoad {
         let project_path = root.join("react-i18next-lens.json");
         let project_content = match std::fs::read_to_string(&project_path) {
-            Ok(content) => content,
+            Ok(content) => Some(content),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => {
                 return ConfigLoad {
                     config: None,
                     diagnostics: vec![ConfigurationDiagnostic {
                         path: project_path,
-                        message: format!("missing project configuration: {error}"),
+                        message: format!("failed to read project configuration: {error}"),
                     }],
                 };
             }
         };
 
-        let project: LensProjectFile = match serde_json::from_str(&project_content) {
-            Ok(project) => project,
-            Err(error) => {
-                return ConfigLoad {
-                    config: None,
-                    diagnostics: vec![ConfigurationDiagnostic {
-                        path: project_path,
-                        message: format!("invalid project configuration: {error}"),
-                    }],
-                };
-            }
+        let project: LensProjectFile = match project_content {
+            Some(content) => match serde_json::from_str(&content) {
+                Ok(project) => project,
+                Err(error) => {
+                    return ConfigLoad {
+                        config: None,
+                        diagnostics: vec![ConfigurationDiagnostic {
+                            path: project_path,
+                            message: format!("invalid project configuration: {error}"),
+                        }],
+                    };
+                }
+            },
+            None => match discover_configuration_source(root) {
+                Ok(source) => LensProjectFile {
+                    extends: Some(
+                        source
+                            .strip_prefix(root)
+                            .unwrap_or(&source)
+                            .to_string_lossy()
+                            .to_string(),
+                    ),
+                    ..LensProjectFile::default()
+                },
+                Err(error) => {
+                    return ConfigLoad {
+                        config: None,
+                        diagnostics: vec![ConfigurationDiagnostic {
+                            path: project_path,
+                            message: error.message(),
+                        }],
+                    };
+                }
+            },
         };
 
         let mut diagnostics = Vec::new();
         let mut facts = ConfigFacts::default();
-        if let Some(extends) = &project.extends {
-            let source_path = root.join(extends);
+        let source_path = match &project.extends {
+            Some(extends) => Some(root.join(extends)),
+            None => match discover_configuration_source(root) {
+                Ok(source) => Some(source),
+                Err(ConfigurationDiscoveryError::NotFound) => None,
+                Err(error) => {
+                    return ConfigLoad {
+                        config: None,
+                        diagnostics: vec![ConfigurationDiagnostic {
+                            path: project_path,
+                            message: error.message(),
+                        }],
+                    };
+                }
+            },
+        };
+        if let Some(source_path) = source_path {
             match analyze_configuration_source(root, &source_path) {
                 Ok(source_facts) => facts = source_facts,
                 Err(message) => diagnostics.push(ConfigurationDiagnostic {
@@ -212,20 +280,39 @@ pub fn configuration_files(root: &Path) -> Vec<PathBuf> {
         if let Ok(config) = serde_json::from_str::<LensProjectFile>(&content) {
             if let Some(extends) = config.extends {
                 files.push(root.join(extends));
+            } else if let Ok(source) = discover_configuration_source(root) {
+                files.push(source);
             }
         }
+    } else if let Ok(source) = discover_configuration_source(root) {
+        files.push(source);
     }
     files
 }
 
+fn discover_configuration_source(root: &Path) -> Result<PathBuf, ConfigurationDiscoveryError> {
+    let mut candidates = Vec::new();
+    for stem in DISCOVERABLE_CONFIG_STEMS {
+        for extension in SUPPORTED_CONFIG_EXTENSIONS {
+            let candidate = root.join(format!("{stem}.{extension}"));
+            if candidate.is_file() {
+                candidates.push(candidate);
+            }
+        }
+    }
+    match candidates.as_slice() {
+        [source] => Ok(source.clone()),
+        [] => Err(ConfigurationDiscoveryError::NotFound),
+        _ => Err(ConfigurationDiscoveryError::Ambiguous(candidates)),
+    }
+}
+
 fn analyze_configuration_source(root: &Path, path: &Path) -> Result<ConfigFacts, String> {
-    const SUPPORTED_EXTENSIONS: &[&str] =
-        &["js", "jsx", "cjs", "mjs", "ts", "tsx", "cts", "mts", "json"];
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("");
-    if !SUPPORTED_EXTENSIONS.contains(&extension) {
+    if !SUPPORTED_CONFIG_EXTENSIONS.contains(&extension) {
         return Err(format!(
             "unsupported configuration extension: {}",
             path.display()
@@ -689,6 +776,72 @@ mod tests {
             ["public/static/locales/{locale}/{namespace}.json"]
         );
         assert_eq!(config.fallback_locales, ["en"]);
+        assert!(loaded.diagnostics.is_empty());
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn discovers_next_i18next_configuration_without_a_lens_project_file() {
+        let root = workspace("zero-config-next-i18next");
+        fs::create_dir_all(root.join("public/static/locales/en")).unwrap();
+        fs::create_dir_all(root.join("public/static/locales/ja")).unwrap();
+        fs::write(
+            root.join("next-i18next.config.js"),
+            r#"
+                const path = require('path')
+                module.exports = {
+                  i18n: { defaultLocale: 'en', locales: ['en', 'ja'] },
+                  localePath: path.resolve('./public/static/locales'),
+                  defaultNS: 'common',
+                }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = WorkspaceConfig::load(&root);
+        let config = loaded.config.expect("auto-discovered config");
+        assert_eq!(config.source_locale, "en");
+        assert_eq!(config.locales, ["en", "ja"]);
+        assert_eq!(
+            config.resource_patterns,
+            ["public/static/locales/{locale}/{namespace}.json"]
+        );
+        assert!(loaded.diagnostics.is_empty());
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn layers_lens_overrides_over_an_auto_discovered_configuration() {
+        let root = workspace("zero-config-with-overrides");
+        fs::create_dir_all(root.join("public/locales/en")).unwrap();
+        fs::create_dir_all(root.join("public/locales/ja")).unwrap();
+        fs::write(
+            root.join("next-i18next.config.js"),
+            r#"
+                module.exports = {
+                  i18n: { defaultLocale: 'en', locales: ['en', 'ja'] },
+                  localePath: './public/locales',
+                  defaultNS: 'common',
+                }
+            "#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("react-i18next-lens.json"),
+            r#"{"sourceLocale":"ja"}"#,
+        )
+        .unwrap();
+
+        let loaded = WorkspaceConfig::load(&root);
+        let config = loaded.config.expect("discovered config with overrides");
+        assert_eq!(config.source_locale, "ja");
+        assert_eq!(config.locales, ["en", "ja"]);
+        assert_eq!(
+            config.resource_patterns,
+            ["public/locales/{locale}/{namespace}.json"]
+        );
         assert!(loaded.diagnostics.is_empty());
 
         fs::remove_dir_all(root).ok();
