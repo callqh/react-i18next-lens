@@ -1,56 +1,106 @@
 # React i18next Lens
 
-React i18next analysis for Zed.
+React i18next Lens brings inline translations, multilingual hover previews, and
+resource navigation to React projects in Zed.
 
-React i18next Lens connects statically resolved translation usages in
-JavaScript/TypeScript React code to i18next JSON resources through a focused,
-read-only Zed language server.
+It statically analyzes JavaScript and TypeScript with Oxc and connects resolved
+translation keys to i18next JSON resources through a focused, read-only language
+server.
 
-Repository: [callqh/react-i18next-lens](https://github.com/callqh/react-i18next-lens)
-
-> This project is a breaking, React-focused fork of
+> React i18next Lens is a breaking, React-focused fork of
 > [nguyenphutrong/intl-lens](https://github.com/nguyenphutrong/intl-lens).
 > Thank you to [Trong Nguyen](https://github.com/nguyenphutrong) and the original
-> contributors for the foundation. The fork intentionally narrows the product
-> scope and is not presented as an upstream continuation.
+> contributors for building the foundation of this project.
 
-## Scope
+## Features
 
-Supported:
+- Low-emphasis inlay hints display the selected locale beside translation keys.
+- Hover previews show every available locale.
+- Each hover translation links to its exact JSON resource value.
+- Go to Definition opens the translation resource directly.
+- Diagnostics report missing keys and incomplete locale coverage.
+- JSON resource changes reload automatically.
+- Existing i18next and next-i18next configuration is discovered without a Lens
+  project file.
 
-- JavaScript, JSX, TypeScript, and TSX
-- `react-i18next`, `i18next`, `next-i18next`, and project `i18n` wrapper modules
-- `useTranslation`, `t`, selector syntax, `i18next.t`, `getFixedT`, and `Trans`
-- i18next JSON v4 resources
-- static translation keys
-- namespace, `keyPrefix`, per-call `ns`, and static `defaultValue`
+## Install
 
-Intentionally unsupported:
+### Zed Extension Gallery
 
-- Vue, Svelte, Angular, PHP, Blade, Dart, and Flutter integrations
-- YAML, ARB, and PHP translation resources
-- user-defined regex extraction patterns
-- guessing dynamic keys
-- automatic deletion of unused translations
+Open the Extension Gallery with `Ctrl+Shift+X`, search for
+`React i18next Lens`, and select **Install**.
 
-Dynamic key expressions are retained as unresolved analysis facts for a future
-resolver. They are never guessed or treated as safe evidence for deletion.
+The extension downloads the matching language-server binary for macOS, Linux,
+or Windows. No separate CLI or MCP server is required.
 
-## Editor features
+### Development build
 
-- selected-locale messages as low-emphasis inlay hints
-- hover previews across locales with clickable links to each resource value
-- go to exact translation definition
-- missing and incomplete translation diagnostics
-- automatic reload when JSON resources change
+Until the marketplace submission is merged, or when testing local changes:
 
-Zed exposes these features through standard LSP capabilities. It cannot replace
-the source key visually and reveal it only on selection; a future editor client
-with a decoration API can render that experience using the same core annotation
-data.
+1. Build the language server:
 
-The inlay-hint locale defaults to the first configured locale. Persist a
-different locale locally in Zed without changing project configuration:
+   ```sh
+   cargo build --release -p react-i18next-lens
+   ```
+
+2. Put `target/release/react-i18next-lens` on the `PATH` visible to Zed.
+3. Run `zed: install dev extension` from the command palette.
+4. Select the `crates/intl-lens-extension` directory.
+
+## Quick start
+
+Open a React project that has an i18next configuration and JSON resources. Lens
+automatically discovers one root-level configuration named:
+
+```text
+next-i18next.config.*
+i18next.config.*
+i18n.config.*
+```
+
+Supported configuration suffixes are:
+
+```text
+.js .jsx .cjs .mjs .ts .tsx .cts .mts .json
+```
+
+The configuration is statically analyzed and is never executed. For example,
+this standard `next-i18next.config.js` works without extra Lens configuration:
+
+```js
+module.exports = {
+  i18n: {
+    defaultLocale: "en",
+    locales: ["en", "ja", "zh-CN"],
+  },
+  localePath: "public/locales",
+};
+```
+
+With resources such as:
+
+```text
+public/locales/en/common.json
+public/locales/ja/common.json
+public/locales/zh-CN/common.json
+```
+
+Lens resolves static usages including:
+
+```tsx
+const { t } = useTranslation("common");
+
+<Button>{t("buttons.save")}</Button>
+<Trans i18nKey="buttons.save" ns="common" />
+```
+
+It also supports `keyPrefix`, per-call `ns`, selector syntax, `i18next.t`,
+`getFixedT`, static `defaultValue`, and project i18n wrapper modules.
+
+## Choose the inlay-hint locale
+
+Inlay hints use the first configured locale by default. To persist another
+locale locally, add this to Zed settings:
 
 ```jsonc
 {
@@ -64,18 +114,18 @@ different locale locally in Zed without changing project configuration:
 }
 ```
 
-Restart the language server after changing this value. If the locale is not
-part of the project's configured locale list, Lens safely falls back to the
-first configured locale.
+Run `zed: restart language server` after changing the value. When the requested
+locale does not exist in the project, Lens safely falls back to the first
+configured locale.
 
-## Configuration
+This is editor-local state: it does not add a configuration file to the project
+or affect other contributors.
 
-For standard projects, no Lens-specific configuration is required. The server
-automatically discovers exactly one root-level `next-i18next.config.*`,
-`i18next.config.*`, or `i18n.config.*` source.
+## Optional project overrides
 
-Use the optional `react-i18next-lens.json` only when discovery is ambiguous or
-dynamic project values need static overrides:
+Most projects should not create a Lens-specific file. Use
+`react-i18next-lens.json` only when automatic discovery is ambiguous or dynamic
+configuration values require a static override:
 
 ```json
 {
@@ -83,19 +133,8 @@ dynamic project values need static overrides:
 }
 ```
 
-Existing i18next or next-i18next configuration is statically analyzed rather
-than executed. Configuration sources may use:
-
-```text
-.js .jsx .cjs .mjs .ts .tsx .cts .mts .json
-```
-
-Lens-specific overrides belong in that optional project file. `sourceLocale`
-must still resolve from the existing i18next config or an explicit override;
-the runtime does not silently assume English.
-
-For a project without an existing config, declare the normalized values
-directly:
+A project without an existing i18next configuration can declare normalized
+values directly:
 
 ```json
 {
@@ -106,35 +145,40 @@ directly:
 }
 ```
 
-Resource templates use `{locale}` and `{namespace}`. i18next `{{lng}}` and
-`{{ns}}` placeholders found in an extended config are normalized to those
-names. Physical locale files determine coverage; `fallbackLng` does not make a
-missing target-locale message count as translated.
+Resource templates use `{locale}` and `{namespace}`. The i18next placeholders
+`{{lng}}` and `{{ns}}` are normalized automatically. Translation resources must
+be JSON; physical locale files determine coverage, regardless of `fallbackLng`.
 
-Translation resources remain strict JSON regardless of the configuration file
-extension.
+## Supported scope
 
-The core publishes immutable workspace generations so configuration, open
-documents, Oxc analysis, and JSON spans cannot be mixed across reloads. Startup
-loads configuration and translation resources only; React source is analyzed
-when Zed opens or changes a document.
+React i18next Lens intentionally focuses on React:
 
-## Build
+- JavaScript, JSX, TypeScript, and TSX
+- `react-i18next`, `i18next`, and `next-i18next`
+- i18next JSON v4 resources
+- statically resolvable translation keys
 
-```sh
-git clone https://github.com/callqh/react-i18next-lens.git
-cd react-i18next-lens
-cargo build --release -p react-i18next-lens
-```
+Dynamic keys are recorded as unresolved facts for a future resolver. Lens does
+not guess them, and it never deletes translations automatically.
 
-The resulting program is:
+Vue, Svelte, Angular, PHP, Blade, Dart, Flutter, YAML, ARB, custom regex
+extractors, and PHP resource files are outside the project scope.
 
-```text
-target/release/react-i18next-lens
-```
+Zed currently exposes Lens through standard LSP capabilities. It can display a
+translation as an inlay hint, but cannot fully replace the source key and reveal
+the original only when selected as some VS Code decoration-based extensions do.
 
-For local Zed development, put `react-i18next-lens` on the environment `PATH`
-seen by Zed, then install this repository as a dev extension.
+## Troubleshooting
+
+- **Hover works but inlay hints do not:** enable inlay hints in Zed, then run
+  `zed: restart language server`.
+- **The displayed language is unexpected:** set `inlayLocale` to an exact locale
+  from the project's configuration and restart the language server.
+- **No translations are detected:** verify that exactly one supported root-level
+  i18next configuration is discoverable and that its source locale has JSON
+  resources.
+- **The language server does not start:** run `zed: open log` and look for
+  `react-i18next-lens` installation or configuration errors.
 
 ## Development
 
@@ -144,9 +188,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets
 ```
 
-The target module boundaries and migration gates are documented in
-[`docs/architecture.md`](docs/architecture.md). The Oxc parser decision is
-documented in
+Architecture and parser decisions are documented in
+[`docs/architecture.md`](docs/architecture.md) and
 [`docs/research/source-parser-options.md`](docs/research/source-parser-options.md).
 
 ## License
