@@ -4,13 +4,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwap;
-use walkdir::WalkDir;
 
 use crate::analysis::{AnalyzerConfig, ReactSourceAnalyzer, SourceAnalysis};
-use crate::audit::{audit_sources, AuditReport};
 use crate::catalog::TranslationCatalog;
 use crate::configuration::{ConfigLoad, ConfigurationDiagnostic, WorkspaceConfig};
-use crate::mutation::{self, AddMissingKey, MutationError, MutationPreview};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct Generation(u64);
@@ -30,17 +27,20 @@ pub struct OpenDocument {
     pub path: PathBuf,
     pub content: String,
     pub version: i32,
-    pub is_open: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnalyzedDocument {
+    pub document: OpenDocument,
+    pub analysis: SourceAnalysis,
 }
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceSnapshot {
     pub generation: Generation,
     pub config: Arc<WorkspaceConfig>,
-    pub documents: Arc<HashMap<PathBuf, OpenDocument>>,
-    pub analyses: Arc<HashMap<PathBuf, SourceAnalysis>>,
+    pub documents: Arc<HashMap<PathBuf, AnalyzedDocument>>,
     pub catalog: Arc<TranslationCatalog>,
-    pub audit: Arc<AuditReport>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,11 +62,8 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn load(root: PathBuf) -> Result<Self, ReloadFailure> {
-        crate::mutation::recover_pending_mutations(&root);
         let config = load_config(&root)?;
         let catalog = load_catalog(&root, &config)?;
-        let (documents, analyses) = scan_source_tree(&root, &config);
-        let audit = build_audit(&root, &config, &catalog, &documents, &analyses);
         Ok(Self {
             root,
             next_generation: AtomicU64::new(2),
@@ -74,10 +71,8 @@ impl Workspace {
             snapshot: ArcSwap::from_pointee(WorkspaceSnapshot {
                 generation: Generation(1),
                 config: Arc::new(config),
-                documents: Arc::new(documents),
-                analyses: Arc::new(analyses),
+                documents: Arc::new(HashMap::new()),
                 catalog: Arc::new(catalog),
-                audit: Arc::new(audit),
             }),
         })
     }
@@ -102,32 +97,8 @@ impl Workspace {
         let _write = self.write_lock.lock().expect("workspace writer poisoned");
         let current = self.snapshot.load_full();
         let mut documents = (*current.documents).clone();
-        let mut analyses = (*current.analyses).clone();
-        match std::fs::read_to_string(path) {
-            Ok(content) => {
-                let analysis = analyzer(&current.config).analyze(path, &content);
-                documents.insert(
-                    path.to_path_buf(),
-                    OpenDocument {
-                        path: path.to_path_buf(),
-                        content,
-                        version: 0,
-                        is_open: false,
-                    },
-                );
-                analyses.insert(path.to_path_buf(), analysis);
-            }
-            Err(_) => {
-                documents.remove(path);
-                analyses.remove(path);
-            }
-        }
-        self.publish(
-            current.config.clone(),
-            documents,
-            analyses,
-            current.catalog.clone(),
-        )
+        documents.remove(path);
+        self.publish(current.config.clone(), documents, current.catalog.clone())
     }
 
     pub fn reload(&self) -> Result<Generation, ReloadFailure> {
@@ -135,57 +106,21 @@ impl Workspace {
         let config = load_config(&self.root)?;
         let catalog = Arc::new(load_catalog(&self.root, &config)?);
         let current = self.snapshot.load_full();
-        let (mut documents, _) = scan_source_tree(&self.root, &config);
-        for (path, document) in current
+        let analyzer = analyzer(&config);
+        let documents = current
             .documents
             .iter()
-            .filter(|(_, document)| document.is_open)
-        {
-            documents.insert(path.clone(), document.clone());
-        }
-        let analyzer = analyzer(&config);
-        let analyses = documents
-            .iter()
-            .map(|(path, document)| {
+            .map(|(path, analyzed)| {
                 (
                     path.clone(),
-                    analyzer.analyze(path, document.content.as_str()),
+                    AnalyzedDocument {
+                        document: analyzed.document.clone(),
+                        analysis: analyzer.analyze(path, analyzed.document.content.as_str()),
+                    },
                 )
             })
             .collect();
-        Ok(self.publish(Arc::new(config), documents, analyses, catalog))
-    }
-
-    pub fn preview_mutation(
-        &self,
-        request: &AddMissingKey,
-    ) -> Result<MutationPreview, MutationError> {
-        let snapshot = self.snapshot();
-        mutation::preview_add_missing_key(
-            &self.root,
-            snapshot.generation,
-            &snapshot.config,
-            &snapshot.catalog,
-            request,
-        )
-    }
-
-    pub fn audit(&self) -> (Generation, Arc<AuditReport>) {
-        let snapshot = self.snapshot();
-        (snapshot.generation, snapshot.audit.clone())
-    }
-
-    pub fn apply_mutation(&self, preview: &MutationPreview) -> Result<Generation, MutationError> {
-        let _write = self.write_lock.lock().expect("workspace writer poisoned");
-        let current = self.snapshot.load_full();
-        mutation::apply_preview(&self.root, current.generation, preview)?;
-        let catalog = Arc::new(TranslationCatalog::load(&self.root, &current.config));
-        Ok(self.publish(
-            current.config.clone(),
-            (*current.documents).clone(),
-            (*current.analyses).clone(),
-            catalog,
-        ))
+        Ok(self.publish(Arc::new(config), documents, catalog))
     }
 
     fn update_document(&self, path: PathBuf, content: String, version: i32) -> Generation {
@@ -193,41 +128,32 @@ impl Workspace {
         let current = self.snapshot.load_full();
         let analysis = analyzer(&current.config).analyze(&path, &content);
         let mut documents = (*current.documents).clone();
-        let mut analyses = (*current.analyses).clone();
         documents.insert(
             path.clone(),
-            OpenDocument {
-                path: path.clone(),
-                content,
-                version,
-                is_open: true,
+            AnalyzedDocument {
+                document: OpenDocument {
+                    path,
+                    content,
+                    version,
+                },
+                analysis,
             },
         );
-        analyses.insert(path, analysis);
-        self.publish(
-            current.config.clone(),
-            documents,
-            analyses,
-            current.catalog.clone(),
-        )
+        self.publish(current.config.clone(), documents, current.catalog.clone())
     }
 
     fn publish(
         &self,
         config: Arc<WorkspaceConfig>,
-        documents: HashMap<PathBuf, OpenDocument>,
-        analyses: HashMap<PathBuf, SourceAnalysis>,
+        documents: HashMap<PathBuf, AnalyzedDocument>,
         catalog: Arc<TranslationCatalog>,
     ) -> Generation {
         let generation = Generation::new(self.next_generation.fetch_add(1, Ordering::Relaxed));
-        let audit = build_audit(&self.root, &config, &catalog, &documents, &analyses);
         self.snapshot.store(Arc::new(WorkspaceSnapshot {
             generation,
             config,
             documents: Arc::new(documents),
-            analyses: Arc::new(analyses),
             catalog,
-            audit: Arc::new(audit),
         }));
         generation
     }
@@ -238,75 +164,6 @@ fn analyzer(config: &WorkspaceConfig) -> ReactSourceAnalyzer {
         default_namespace: config.default_namespace.clone(),
         namespace_separator: config.namespace_separator,
         key_separator: config.key_separator,
-    })
-}
-
-fn scan_source_tree(
-    root: &Path,
-    config: &WorkspaceConfig,
-) -> (
-    HashMap<PathBuf, OpenDocument>,
-    HashMap<PathBuf, SourceAnalysis>,
-) {
-    let analyzer = analyzer(config);
-    let mut documents = HashMap::new();
-    let mut analyses = HashMap::new();
-    for entry in WalkDir::new(root)
-        .into_iter()
-        .filter_entry(|entry| !is_ignored(entry.path()))
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file() && is_source(entry.path()))
-    {
-        let Ok(content) = std::fs::read_to_string(entry.path()) else {
-            continue;
-        };
-        let path = entry.path().to_path_buf();
-        analyses.insert(path.clone(), analyzer.analyze(&path, &content));
-        documents.insert(
-            path.clone(),
-            OpenDocument {
-                path,
-                content,
-                version: 0,
-                is_open: false,
-            },
-        );
-    }
-    (documents, analyses)
-}
-
-fn build_audit(
-    root: &Path,
-    config: &WorkspaceConfig,
-    catalog: &TranslationCatalog,
-    documents: &HashMap<PathBuf, OpenDocument>,
-    analyses: &HashMap<PathBuf, SourceAnalysis>,
-) -> AuditReport {
-    audit_sources(
-        root,
-        config,
-        catalog,
-        analyses.iter().filter_map(|(path, analysis)| {
-            documents
-                .get(path)
-                .map(|document| (path.as_path(), document.content.as_str(), analysis))
-        }),
-    )
-}
-
-fn is_source(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|extension| extension.to_str()),
-        Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts")
-    )
-}
-
-fn is_ignored(path: &Path) -> bool {
-    path.components().any(|component| {
-        matches!(
-            component.as_os_str().to_str(),
-            Some("node_modules" | ".git" | "target" | ".next" | "dist" | "build")
-        )
     })
 }
 
@@ -379,10 +236,10 @@ mod tests {
 
         while !finished.load(Ordering::Acquire) {
             let snapshot = workspace.snapshot();
-            let document = snapshot.documents.get(&path).unwrap();
-            let analysis = snapshot.analyses.get(&path).unwrap();
-            let expected = format!("common:value{}", document.version);
-            let actual = analysis
+            let analyzed = snapshot.documents.get(&path).unwrap();
+            let expected = format!("common:value{}", analyzed.document.version);
+            let actual = analyzed
+                .analysis
                 .usages
                 .iter()
                 .find_map(|usage| match &usage.resolution {
@@ -421,24 +278,20 @@ mod tests {
     }
 
     #[test]
-    fn audit_uses_open_buffer_from_the_same_snapshot() {
-        let root = fixture("open-buffer-audit");
-        let workspace = Workspace::load(root.clone()).unwrap();
+    fn load_defers_source_analysis_until_a_document_is_opened() {
+        let root = fixture("editor-load");
         let path = root.join("component.tsx");
-        workspace.open_document(
-            path,
-            "import { useTranslation } from 'react-i18next'; const { t } = useTranslation('common'); t('missing')".to_string(),
-            1,
-        );
-        let snapshot = workspace.snapshot();
-        let missing = snapshot
-            .audit
-            .missing
-            .iter()
-            .find(|item| item.key == "common:missing")
-            .unwrap();
-        assert_eq!(missing.used_in.len(), 1);
-        assert_eq!(snapshot.generation, workspace.audit().0);
+        fs::write(
+            &path,
+            "import { useTranslation } from 'react-i18next'; const { t } = useTranslation('common'); t('value')",
+        )
+        .unwrap();
+
+        let workspace = Workspace::load(root.clone()).unwrap();
+        assert!(workspace.snapshot().documents.is_empty());
+
+        workspace.open_document(path.clone(), fs::read_to_string(path).unwrap(), 1);
+        assert_eq!(workspace.snapshot().documents.len(), 1);
         fs::remove_dir_all(root).ok();
     }
 

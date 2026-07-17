@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "React i18next analysis for editors, CI, and AI agents"
+description = "React i18next analysis for Zed"
 
 [lib]
 name = "react_i18next_lens"
@@ -15,14 +15,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "react-i18next-lens"
 path = "src/main.rs"
-
-[[bin]]
-name = "react-i18next-lens-cli"
-path = "src/cli.rs"
-
-[[bin]]
-name = "react-i18next-lens-mcp"
-path = "src/mcp.rs"
 
 [dependencies]
 tower-lsp.workspace = true
@@ -42,10 +34,3 @@ oxc_parser.workspace = true
 oxc_semantic.workspace = true
 oxc_span.workspace = true
 arc-swap.workspace = true
-sha2.workspace = true
-clap = { version = "4", features = ["derive"] }
-colored = "2"
-indicatif = "0.17"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }

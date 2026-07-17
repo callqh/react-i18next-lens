@@ -130,7 +130,7 @@ The Text coordinates module converts byte spans to negotiated LSP positions. Rep
 3. Introduce `CanonicalKey`, `ByteSpan`, and the Text coordinates module.
 4. Implement `ReactSourceAnalyzer` with Oxc parser traversal while retaining current behaviour behind tests.
 5. Add semantic binding resolution for `useTranslation`, `i18next`, and `getFixedT`.
-6. Route LSP document analysis and whole-workspace audit through the same implementation.
+6. Route open LSP documents through the same analyzer without scanning unopened source files.
 7. Remove generic `functionPatterns` and unsupported-framework defaults as an intentional product-scope change.
 8. Delete the regex `KeyFinder` after parity and correctness acceptance.
 
@@ -143,5 +143,5 @@ The Text coordinates module converts byte spans to negotiated LSP positions. Rep
 - Selector-style translation calls are supported.
 - Incomplete editor code returns useful diagnostics without crashing.
 - CJK, emoji, combining characters, and CRLF produce correct LSP ranges.
-- Benchmarks record cold workspace audit time, open-document analysis latency, peak memory, and release binary size.
-- LSP, CLI, and MCP consume the same analysis results without importing Oxc types.
+- Benchmarks record cold LSP startup time, open-document analysis latency, peak memory, and release binary size.
+- The LSP consumes analysis results without importing Oxc types across the adapter boundary.

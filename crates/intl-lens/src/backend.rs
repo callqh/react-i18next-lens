@@ -1,8 +1,6 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::Value;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -12,43 +10,40 @@ use crate::analysis::{SourceAnalysis, TranslationUsage};
 use crate::catalog::CatalogEntry;
 use crate::configuration::configuration_files;
 use crate::domain::{ByteSpan, KeyResolution, TranslationKey};
-use crate::mutation::AddMissingKey;
 use crate::workspace::{Workspace, WorkspaceSnapshot};
 
-const ADD_MISSING_SOURCE_KEY_COMMAND: &str = "react-i18next-lens.addMissingSourceKey";
-const SELECT_INLAY_LOCALE_COMMAND: &str = "react-i18next-lens.selectInlayLocale";
-
 #[derive(Default)]
-struct InlayLocaleSelection {
-    selected: Option<String>,
+struct InlayLocalePreference {
+    locale: Option<String>,
 }
 
-impl InlayLocaleSelection {
+impl InlayLocalePreference {
+    fn from_initialization_options(options: Option<&serde_json::Value>) -> Self {
+        Self {
+            locale: options
+                .and_then(|options| options.get("inlayLocale"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        }
+    }
+
     fn resolve<'a>(&self, locales: &'a [String]) -> Option<&'a str> {
-        self.selected
+        self.locale
             .as_deref()
-            .and_then(|selected| {
+            .and_then(|preferred| {
                 locales
                     .iter()
-                    .find(|locale| locale.as_str() == selected)
+                    .find(|locale| locale.as_str() == preferred)
                     .map(String::as_str)
             })
             .or_else(|| locales.first().map(String::as_str))
-    }
-
-    fn select(&mut self, locale: String, locales: &[String]) -> bool {
-        if !locales.contains(&locale) {
-            return false;
-        }
-        self.selected = Some(locale);
-        true
     }
 }
 
 pub struct I18nBackend {
     client: Client,
     workspace: Arc<RwLock<Option<Arc<Workspace>>>>,
-    inlay_locale_selection: Arc<RwLock<InlayLocaleSelection>>,
+    inlay_locale_preference: Arc<RwLock<InlayLocalePreference>>,
     inlay_hint_refresh_supported: Arc<RwLock<bool>>,
     watched_files_dynamic_registration_supported: Arc<RwLock<bool>>,
     watched_files_relative_pattern_supported: Arc<RwLock<bool>>,
@@ -59,7 +54,7 @@ impl I18nBackend {
         Self {
             client,
             workspace: Arc::new(RwLock::new(None)),
-            inlay_locale_selection: Arc::new(RwLock::new(InlayLocaleSelection::default())),
+            inlay_locale_preference: Arc::new(RwLock::new(InlayLocalePreference::default())),
             inlay_hint_refresh_supported: Arc::new(RwLock::new(false)),
             watched_files_dynamic_registration_supported: Arc::new(RwLock::new(false)),
             watched_files_relative_pattern_supported: Arc::new(RwLock::new(false)),
@@ -155,9 +150,12 @@ impl I18nBackend {
             .and_then(|workspace| {
                 let path = uri.to_file_path().ok()?;
                 let snapshot = workspace.snapshot();
-                let document = snapshot.documents.get(&path)?;
-                let analysis = snapshot.analyses.get(&path)?;
-                Some(diagnostics_for(&snapshot, analysis, &document.content))
+                let analyzed = snapshot.documents.get(&path)?;
+                Some(diagnostics_for(
+                    &snapshot,
+                    &analyzed.analysis,
+                    &analyzed.document.content,
+                ))
             })
             .unwrap_or_default();
         self.client
@@ -230,6 +228,10 @@ impl I18nBackend {
 #[tower_lsp::async_trait]
 impl LanguageServer for I18nBackend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        *self.inlay_locale_preference.write().await =
+            InlayLocalePreference::from_initialization_options(
+                params.initialization_options.as_ref(),
+            );
         let workspace_capabilities = params.capabilities.workspace.as_ref();
         *self.inlay_hint_refresh_supported.write().await = workspace_capabilities
             .and_then(|workspace| workspace.inlay_hint.as_ref())
@@ -282,19 +284,6 @@ impl LanguageServer for I18nBackend {
                 inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
                     InlayHintOptions::default(),
                 ))),
-                code_action_provider: Some(CodeActionProviderCapability::Options(
-                    CodeActionOptions {
-                        code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
-                        ..Default::default()
-                    },
-                )),
-                execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: vec![
-                        ADD_MISSING_SOURCE_KEY_COMMAND.to_string(),
-                        SELECT_INLAY_LOCALE_COMMAND.to_string(),
-                    ],
-                    ..Default::default()
-                }),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -416,10 +405,10 @@ impl LanguageServer for I18nBackend {
         let Ok(path) = uri.to_file_path() else {
             return Ok(None);
         };
-        let Some(document) = snapshot.documents.get(&path) else {
+        let Some(analyzed) = snapshot.documents.get(&path) else {
             return Ok(None);
         };
-        let prefix = completion_prefix(&document.content, position).unwrap_or_default();
+        let prefix = completion_prefix(&analyzed.document.content, position).unwrap_or_default();
         let source_locale = &snapshot.config.source_locale;
         let mut items = snapshot
             .catalog
@@ -468,159 +457,6 @@ impl LanguageServer for I18nBackend {
         })
     }
 
-    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
-        let mut actions = params
-            .context
-            .diagnostics
-            .iter()
-            .filter_map(|diagnostic| {
-                let NumberOrString::String(code) = diagnostic.code.as_ref()? else {
-                    return None;
-                };
-                if code != "missing-source-translation" {
-                    return None;
-                }
-                let data = diagnostic.data.as_ref()?;
-                let key = data.get("key")?.as_str()?;
-                Some(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: format!("Add missing source key '{key}'"),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: Some(vec![diagnostic.clone()]),
-                    command: Some(Command {
-                        title: "Preview and add source key".to_string(),
-                        command: ADD_MISSING_SOURCE_KEY_COMMAND.to_string(),
-                        arguments: Some(vec![data.clone()]),
-                    }),
-                    ..Default::default()
-                }))
-            })
-            .collect::<Vec<_>>();
-        let uri = &params.text_document.uri;
-        if let Some((snapshot, _, _)) = self.key_at(uri, params.range.start).await {
-            if let Some(locale) = self.current_inlay_locale(&snapshot).await {
-                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: format!("Select inlay locale (current: {locale})"),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    command: Some(Command {
-                        title: "Select inlay locale".to_string(),
-                        command: SELECT_INLAY_LOCALE_COMMAND.to_string(),
-                        arguments: None,
-                    }),
-                    ..Default::default()
-                }));
-            }
-        }
-        Ok((!actions.is_empty()).then_some(actions))
-    }
-
-    async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
-        if params.command == SELECT_INLAY_LOCALE_COMMAND {
-            return self.select_inlay_locale().await;
-        }
-        if params.command != ADD_MISSING_SOURCE_KEY_COMMAND {
-            return Ok(None);
-        }
-        let Some(argument) = params.arguments.first() else {
-            return Ok(None);
-        };
-        let raw_key = argument
-            .as_str()
-            .or_else(|| argument.get("key").and_then(Value::as_str));
-        let Some(raw_key) = raw_key else {
-            return Ok(None);
-        };
-        let default_value = argument
-            .get("defaultValue")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let Some(workspace) = self.current_workspace().await else {
-            return Ok(None);
-        };
-        let snapshot = workspace.snapshot();
-        let Some(key) = TranslationKey::from_source(
-            raw_key,
-            None,
-            None,
-            &snapshot.config.default_namespace,
-            snapshot.config.namespace_separator,
-            snapshot.config.key_separator,
-        ) else {
-            return Ok(None);
-        };
-        let request = AddMissingKey {
-            key,
-            default_value,
-            translations: HashMap::new(),
-        };
-        let preview = match workspace.preview_mutation(&request) {
-            Ok(preview) => preview,
-            Err(error) => {
-                self.client
-                    .show_message(
-                        MessageType::ERROR,
-                        format!("Could not preview key: {error:?}"),
-                    )
-                    .await;
-                return Ok(None);
-            }
-        };
-        let changes = preview
-            .edits
-            .iter()
-            .map(|edit| {
-                format!(
-                    "{}\nBefore:\n{}\nAfter:\n{}",
-                    edit.file.display(),
-                    truncate(&edit.before, 1200),
-                    truncate(&edit.after, 1200)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let apply = self
-            .client
-            .show_message_request(
-                MessageType::INFO,
-                format!(
-                    "Preview: add '{}' to {} file(s):\n\n{}",
-                    raw_key,
-                    preview.edits.len(),
-                    changes
-                ),
-                Some(vec![
-                    MessageActionItem {
-                        title: "Apply".to_string(),
-                        properties: Default::default(),
-                    },
-                    MessageActionItem {
-                        title: "Cancel".to_string(),
-                        properties: Default::default(),
-                    },
-                ]),
-            )
-            .await
-            .ok()
-            .flatten()
-            .is_some_and(|action| action.title == "Apply");
-        if !apply {
-            return Ok(None);
-        }
-        match workspace.apply_mutation(&preview) {
-            Ok(_) => {
-                self.re_diagnose_open_documents().await;
-                if *self.inlay_hint_refresh_supported.read().await {
-                    self.client.inlay_hint_refresh().await.ok();
-                }
-            }
-            Err(error) => {
-                self.client
-                    .show_message(MessageType::ERROR, format!("Could not add key: {error:?}"))
-                    .await;
-            }
-        }
-        Ok(None)
-    }
-
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
         let Some(workspace) = self.current_workspace().await else {
             return Ok(None);
@@ -629,15 +465,14 @@ impl LanguageServer for I18nBackend {
         let Ok(path) = params.text_document.uri.to_file_path() else {
             return Ok(None);
         };
-        let (Some(document), Some(analysis)) =
-            (snapshot.documents.get(&path), snapshot.analyses.get(&path))
-        else {
+        let Some(analyzed) = snapshot.documents.get(&path) else {
             return Ok(None);
         };
         let Some(inlay_locale) = self.current_inlay_locale(&snapshot).await else {
             return Ok(None);
         };
-        let hints = analysis
+        let hints = analyzed
+            .analysis
             .usages
             .iter()
             .filter_map(|usage| {
@@ -645,7 +480,7 @@ impl LanguageServer for I18nBackend {
                     return None;
                 };
                 let entry = snapshot.catalog.get(&inlay_locale, key)?;
-                let range = byte_span_to_range(&document.content, usage.expression_span)?;
+                let range = byte_span_to_range(&analyzed.document.content, usage.expression_span)?;
                 if !ranges_overlap(range, params.range) {
                     return None;
                 }
@@ -670,59 +505,11 @@ impl LanguageServer for I18nBackend {
 
 impl I18nBackend {
     async fn current_inlay_locale(&self, snapshot: &WorkspaceSnapshot) -> Option<String> {
-        self.inlay_locale_selection
+        self.inlay_locale_preference
             .read()
             .await
             .resolve(&snapshot.config.locales)
             .map(str::to_string)
-    }
-
-    async fn select_inlay_locale(&self) -> Result<Option<Value>> {
-        let Some(workspace) = self.current_workspace().await else {
-            return Ok(None);
-        };
-        let snapshot = workspace.snapshot();
-        let Some(current) = self.current_inlay_locale(&snapshot).await else {
-            return Ok(None);
-        };
-        let actions = snapshot
-            .config
-            .locales
-            .iter()
-            .map(|locale| MessageActionItem {
-                title: locale.clone(),
-                properties: Default::default(),
-            })
-            .collect::<Vec<_>>();
-        let selected = self
-            .client
-            .show_message_request(
-                MessageType::INFO,
-                format!("Select the locale used by inlay hints (current: {current})"),
-                Some(actions),
-            )
-            .await
-            .ok()
-            .flatten()
-            .map(|action| action.title);
-        let Some(selected) = selected else {
-            return Ok(None);
-        };
-
-        if !self
-            .inlay_locale_selection
-            .write()
-            .await
-            .select(selected.clone(), &snapshot.config.locales)
-        {
-            return Ok(None);
-        }
-        if *self.inlay_hint_refresh_supported.read().await {
-            if let Err(error) = self.client.inlay_hint_refresh().await {
-                tracing::warn!(?error, "inlay hint refresh failed after locale selection");
-            }
-        }
-        Ok(Some(Value::String(selected)))
     }
 
     async fn key_at(
@@ -733,10 +520,9 @@ impl I18nBackend {
         let workspace = self.current_workspace().await?;
         let snapshot = workspace.snapshot();
         let path = uri.to_file_path().ok()?;
-        let document = snapshot.documents.get(&path)?;
-        let analysis = snapshot.analyses.get(&path)?;
-        let offset = position_to_byte(&document.content, position)?;
-        let usage = analysis.usages.iter().find(|usage| {
+        let analyzed = snapshot.documents.get(&path)?;
+        let offset = position_to_byte(&analyzed.document.content, position)?;
+        let usage = analyzed.analysis.usages.iter().find(|usage| {
             usage.expression_span.start as usize <= offset
                 && offset <= usage.expression_span.end as usize
         })?;
@@ -968,16 +754,18 @@ mod tests {
     }
 
     #[test]
-    fn inlay_locale_defaults_to_first_configured_and_honors_selection() {
+    fn inlay_locale_uses_persistent_initialization_preference_with_safe_fallback() {
         let locales = vec!["en".to_string(), "ja".to_string(), "zh-CN".to_string()];
-        let mut selection = InlayLocaleSelection::default();
+        let preference = InlayLocalePreference::from_initialization_options(Some(
+            &serde_json::json!({ "inlayLocale": "zh-CN" }),
+        ));
 
-        assert_eq!(selection.resolve(&locales), Some("en"));
-        assert!(selection.select("ja".to_string(), &locales));
-        assert_eq!(selection.resolve(&locales), Some("ja"));
-        assert!(!selection.select("removed-locale".to_string(), &locales));
-        assert_eq!(selection.resolve(&locales), Some("ja"));
-        assert_eq!(selection.resolve(&locales[..1]), Some("en"));
+        assert_eq!(preference.resolve(&locales), Some("zh-CN"));
+        assert_eq!(preference.resolve(&locales[..2]), Some("en"));
+        assert_eq!(
+            InlayLocalePreference::default().resolve(&locales),
+            Some("en")
+        );
     }
 
     #[test]

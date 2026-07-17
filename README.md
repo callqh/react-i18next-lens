@@ -1,10 +1,10 @@
 # React i18next Lens
 
-React i18next analysis for editors, CI, and AI agents.
+React i18next analysis for Zed.
 
 React i18next Lens connects statically resolved translation usages in
-JavaScript/TypeScript React code to i18next JSON resources. It provides a Zed
-language server, a CLI, and an MCP server backed by the same Rust core.
+JavaScript/TypeScript React code to i18next JSON resources through a focused,
+read-only Zed language server.
 
 Repository: [callqh/react-i18next-lens](https://github.com/callqh/react-i18next-lens)
 
@@ -39,11 +39,9 @@ resolver. They are never guessed or treated as safe evidence for deletion.
 ## Editor features
 
 - selected-locale messages as low-emphasis inlay hints
-- translation-key code action for selecting the inlay-hint locale
 - hover previews across locales with clickable links to each resource value
 - go to exact translation definition
 - missing and incomplete translation diagnostics
-- explicit code actions for supported safe edits
 - automatic reload when JSON resources change
 
 Zed exposes these features through standard LSP capabilities. It cannot replace
@@ -51,11 +49,24 @@ the source key visually and reveal it only on selection; a future editor client
 with a decoration API can render that experience using the same core annotation
 data.
 
-The inlay-hint locale defaults to the first configured locale. To change it,
-place the cursor on a translation key, open Zed's Code Actions menu, choose
-`Select inlay locale`, and then choose one of the configured locales. The
-selection lasts for the current language-server session and refreshes visible
-inlay hints immediately.
+The inlay-hint locale defaults to the first configured locale. Persist a
+different locale locally in Zed without changing project configuration:
+
+```jsonc
+{
+  "lsp": {
+    "react-i18next-lens": {
+      "initialization_options": {
+        "inlayLocale": "zh-CN"
+      }
+    }
+  }
+}
+```
+
+Restart the language server after changing this value. If the locale is not
+part of the project's configured locale list, Lens safely falls back to the
+first configured locale.
 
 ## Configuration
 
@@ -103,10 +114,10 @@ missing target-locale message count as translated.
 Translation resources remain strict JSON regardless of the configuration file
 extension.
 
-The core publishes immutable workspace generations. Configuration, open
-documents, Oxc analysis, JSON spans, audit results, and mutation plans cannot be
-mixed across reloads. Adding a missing key uses preview/apply with generation
-and SHA-256 checks; existing messages are never overwritten.
+The core publishes immutable workspace generations so configuration, open
+documents, Oxc analysis, and JSON spans cannot be mixed across reloads. Startup
+loads configuration and translation resources only; React source is analyzed
+when Zed opens or changes a document.
 
 ## Build
 
@@ -116,29 +127,11 @@ cd react-i18next-lens
 cargo build --release -p react-i18next-lens
 ```
 
-The resulting programs are:
+The resulting program is:
 
 ```text
 target/release/react-i18next-lens
-target/release/react-i18next-lens-cli
-target/release/react-i18next-lens-mcp
 ```
-
-Audit and mutation examples:
-
-```sh
-react-i18next-lens-cli audit
-
-# Preview only; prints complete before/after JSON edits.
-react-i18next-lens-cli fix common:buttons.save --default-value Save
-
-# Explicitly apply the same preview operation.
-react-i18next-lens-cli fix common:buttons.save --default-value Save --apply
-```
-
-The MCP adapter exposes separate `preview_add_missing_key` and
-`apply_mutation` tools. Apply accepts only a server-issued preview ID and still
-revalidates the complete workspace state and target-file SHA-256 fingerprints.
 
 For local Zed development, put `react-i18next-lens` on the environment `PATH`
 seen by Zed, then install this repository as a dev extension.

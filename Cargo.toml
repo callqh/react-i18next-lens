@@ -36,7 +36,6 @@ oxc_parser = "=0.110.0"
 oxc_semantic = "=0.110.0"
 oxc_span = "=0.110.0"
 arc-swap = "1"
-sha2 = "0.10"
 
 # Zed extension
 zed_extension_api = "0.7"

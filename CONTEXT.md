@@ -21,8 +21,8 @@ The locale used as the reference for translation analysis and source-message dia
 _Avoid_: Default language
 
 **Inlay locale**:
-The configured locale whose messages are shown as inline explanations for the current language-server session. It defaults to the first configured locale and may be changed through an editor action without changing project configuration.
-_Avoid_: Treating the source locale as the only display locale, persisted Lens-only locale setting
+The configured locale whose messages are shown as inline explanations. It may be persisted in Zed's local LSP initialization settings and defaults safely to the first configured locale.
+_Avoid_: Treating the source locale as the only display locale, project-owned Lens configuration
 
 **Translation resource**:
 An i18next JSON v4 document containing nested or flat translation keys, including namespaces, plurals, interpolation values, arrays, and objects.
@@ -35,10 +35,6 @@ _Avoid_: Assuming every translation call contains a usable key
 **Configuration source**:
 An existing i18next or next-i18next JavaScript, TypeScript, or JSON module that is statically interpreted and normalized into workspace configuration without executing project code.
 _Avoid_: Executable editor configuration, duplicated Lens-only i18next settings
-
-**Mutation preview**:
-A complete, validated description of translation-resource edits that must be explicitly accepted before any file is changed.
-_Avoid_: Best-effort direct JSON writes, automatic cleanup
 
 ## Boundaries
 
@@ -58,16 +54,9 @@ _Avoid_: Best-effort direct JSON writes, automatic cleanup
 - Values that remain dynamic after static analysis produce configuration diagnostics and require explicit overrides.
 - `sourceLocale` is required. Initialization may suggest `en` when it is discovered, but runtime analysis never assumes English implicitly.
 - A missing `sourceLocale` setting or missing source-locale resources makes the workspace configuration invalid and produces actionable diagnostics.
-- Translation coverage is based on keys physically present in each target locale, not merely values resolvable through i18next fallback.
-- When fallback configuration can resolve a physically missing key, diagnostics may report the effective fallback locale while still classifying the target locale as untranslated.
-- LSP, CLI, and MCP adapters may accept workspace path, configuration path, and operational settings such as log level, but must not redefine locale paths, source locale, or analysis semantics independently.
-- The LSP inlay locale is session-scoped operational state. It must resolve to a configured locale, defaults to the first configured locale, and never changes source-locale analysis semantics.
+- Translation diagnostics are based on keys physically present in each configured locale, not merely values resolvable through i18next fallback.
+- The LSP adapter may accept workspace path and operational settings such as log level, but must not redefine locale paths, source locale, or analysis semantics independently.
+- The LSP inlay locale is local editor state supplied through initialization options. It must resolve to a configured locale, defaults to the first configured locale, and never changes source-locale analysis semantics.
 - Automatic discovery may suggest configuration when exactly one common i18next layout is unambiguous; ambiguous candidates produce a configuration diagnostic instead of being selected silently.
-- LSP, CLI, and MCP adapters must resolve the same workspace configuration into the same analysis behavior.
-- The first release may add a missing static key to translation resources through an explicit mutation preview.
-- When adding a key missing from the source locale, a statically resolved i18next `defaultValue` becomes its initial source message.
-- Without a static `defaultValue`, the canonical key itself becomes a visible source-locale placeholder and remains an incomplete-message diagnostic until replaced.
-- Target locales are changed only when the user provides an actual translated message; placeholders are never bulk-written across locales or counted as completed translations.
-- A mutation validates every target before committing changes, preserves file style and key ordering, and uses atomic replacement so partial writes are not exposed.
-- CLI and MCP mutations require an explicit apply operation; LSP mutations require a user-invoked code action.
-- Unused keys are reported but never deleted automatically. Automatic translation, key renaming, and overwriting existing messages are outside the first-release mutation scope.
+- LSP startup loads configuration and translation resources only. React source is analyzed when the editor opens or changes a document; the server never scans the complete source tree during initialization.
+- React i18next Lens is read-only. CLI, MCP, full-workspace audit, automatic translation, key mutation, renaming, and deletion are deferred features.

@@ -142,7 +142,8 @@ fn discover_resources(root: &Path, config: &WorkspaceConfig) -> Vec<ResourceMatc
                 else {
                     continue;
                 };
-                for entry in WalkDir::new(root)
+                let search_root = namespace_resource_search_root(root, &locale_pattern);
+                for entry in WalkDir::new(search_root)
                     .into_iter()
                     .filter_entry(|entry| !is_ignored(entry.path()))
                     .filter_map(Result::ok)
@@ -176,6 +177,25 @@ fn discover_resources(root: &Path, config: &WorkspaceConfig) -> Vec<ResourceMatc
     resources.sort_by(|left, right| left.file.cmp(&right.file));
     resources.dedup_by(|left, right| left.locale == right.locale && left.file == right.file);
     resources
+}
+
+fn namespace_resource_search_root(root: &Path, pattern: &str) -> PathBuf {
+    let prefix = pattern.split("{namespace}").next().unwrap_or_default();
+    let prefix = Path::new(prefix);
+    let directory = if pattern
+        .split("{namespace}")
+        .next()
+        .is_some_and(|prefix| prefix.ends_with(['/', '\\']))
+    {
+        prefix
+    } else {
+        prefix.parent().unwrap_or_else(|| Path::new(""))
+    };
+    if directory.to_string_lossy().contains(['*', '?', '[', '{']) {
+        root.to_path_buf()
+    } else {
+        root.join(directory)
+    }
 }
 
 fn namespace_from_pattern(pattern: &str, path: &Path) -> Option<String> {
@@ -487,6 +507,16 @@ mod tests {
         assert!(entries
             .iter()
             .any(|entry| entry.key.canonical() == "common:flat.key"));
+    }
+
+    #[test]
+    fn namespace_resources_are_scanned_from_their_static_directory() {
+        let root = Path::new("/workspace");
+
+        assert_eq!(
+            namespace_resource_search_root(root, "public/static/locales/en/{namespace}.json"),
+            root.join("public/static/locales/en")
+        );
     }
 
     #[test]
