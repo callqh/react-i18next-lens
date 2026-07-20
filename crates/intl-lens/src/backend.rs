@@ -359,11 +359,19 @@ impl LanguageServer for I18nBackend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        if let (Some(workspace), Ok(path)) = (
+        let closed = if let (Some(workspace), Ok(path)) = (
             self.current_workspace().await,
             params.text_document.uri.to_file_path(),
         ) {
             workspace.close_document(&path);
+            true
+        } else {
+            false
+        };
+        if closed && *self.inlay_hint_refresh_supported.read().await {
+            if let Err(error) = self.client.inlay_hint_refresh().await {
+                tracing::warn!(?error, "inlay hint refresh after document close failed");
+            }
         }
     }
 
