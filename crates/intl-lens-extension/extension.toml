@@ -1,9 +1,9 @@
 id = "react-i18next-lens"
 name = "React i18next Lens"
-version = "0.0.2"
+version = "0.0.3"
 schema_version = 1
 license = "MIT"
-authors = ["callqh", "Trong Nguyen"]
+authors = ["callqh"]
 description = "React i18next analysis for Zed - inline source-locale messages, hover, definitions, and diagnostics"
 repository = "https://github.com/callqh/react-i18next-lens"
 

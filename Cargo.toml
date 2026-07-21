@@ -3,11 +3,11 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
-authors = ["callqh", "Trong Nguyen"]
+authors = ["callqh"]
 repository = "https://github.com/callqh/react-i18next-lens"
 
 [workspace.dependencies]
