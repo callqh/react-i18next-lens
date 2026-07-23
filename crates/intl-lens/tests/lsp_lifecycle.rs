@@ -67,6 +67,60 @@ impl Drop for LspProcess {
 
 #[test]
 fn closing_a_document_refreshes_client_inlay_cache_when_supported() {
+    let (mut server, root, source_path) = open_translation_document(json!({
+        "workspace": {
+            "inlayHint": { "refreshSupport": true }
+        }
+    }));
+    server.send(json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didClose",
+        "params": { "textDocument": { "uri": url(&source_path) } }
+    }));
+
+    let refresh = server.receive_until(|message| {
+        message.get("method") == Some(&json!("workspace/inlayHint/refresh"))
+    });
+    assert!(
+        refresh.is_some(),
+        "didClose must invalidate Zed's cached hints before the document is reopened"
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn translation_inlay_hints_are_not_classified_as_type_hints() {
+    let (mut server, root, source_path) = open_translation_document(json!({}));
+    server.send(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "textDocument/inlayHint",
+        "params": {
+            "textDocument": { "uri": url(&source_path) },
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": { "line": 3, "character": 0 }
+            }
+        }
+    }));
+
+    let response = server
+        .receive_until(|message| message.get("id") == Some(&json!(2)))
+        .expect("inlay hint response");
+    let hint = response["result"]
+        .as_array()
+        .and_then(|hints| hints.first())
+        .expect("translation inlay hint");
+    assert_eq!(hint["label"], json!(" = Save"));
+    assert!(
+        hint.get("kind").is_none(),
+        "translation hints must remain visible when editor type hints are disabled"
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+fn open_translation_document(capabilities: Value) -> (LspProcess, PathBuf, PathBuf) {
     let root = fixture();
     let source_path = root.join("component.tsx");
     let source = "import { useTranslation } from 'react-i18next';\nconst { t } = useTranslation('common');\nt('buttons.save');\n";
@@ -79,11 +133,7 @@ fn closing_a_document_refreshes_client_inlay_cache_when_supported() {
         "method": "initialize",
         "params": {
             "rootUri": url(&root),
-            "capabilities": {
-                "workspace": {
-                    "inlayHint": { "refreshSupport": true }
-                }
-            }
+            "capabilities": capabilities
         }
     }));
     assert!(server
@@ -102,20 +152,8 @@ fn closing_a_document_refreshes_client_inlay_cache_when_supported() {
             }
         }
     }));
-    server.send(json!({
-        "jsonrpc": "2.0",
-        "method": "textDocument/didClose",
-        "params": { "textDocument": { "uri": url(&source_path) } }
-    }));
 
-    let refresh = server.receive_until(|message| {
-        message.get("method") == Some(&json!("workspace/inlayHint/refresh"))
-    });
-    assert!(
-        refresh.is_some(),
-        "didClose must invalidate Zed's cached hints before the document is reopened"
-    );
-    fs::remove_dir_all(root).ok();
+    (server, root, source_path)
 }
 
 fn read_message(reader: &mut impl BufRead) -> Option<Value> {

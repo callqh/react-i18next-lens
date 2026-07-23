@@ -1,6 +1,6 @@
 id = "react-i18next-lens"
 name = "React i18next Lens"
-version = "0.0.3"
+version = "0.0.4"
 schema_version = 1
 license = "MIT"
 authors = ["callqh"]

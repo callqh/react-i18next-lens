@@ -498,7 +498,7 @@ impl LanguageServer for I18nBackend {
                         " = {}",
                         truncate(&entry.value.display(), 30)
                     )),
-                    kind: Some(InlayHintKind::TYPE),
+                    kind: None,
                     text_edits: None,
                     tooltip: None,
                     padding_left: Some(true),
